@@ -4,13 +4,13 @@
 # the vendored BFCL copy (if you have one under ./berkeley-function-call-leaderboard).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Namespaced to avoid clobbering the caller's SCRIPT_DIR.
+_TOOL_USE_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
-source "${REPO_ROOT}/eval_scripts/common_eval_env.sh"
+source "${_TOOL_USE_ENV_DIR}/../eval_scripts/common_eval_env.sh"
 
 # Prefer the local (patched) BFCL checkout if present.
-LOCAL_BFCL="${SCRIPT_DIR}/berkeley-function-call-leaderboard"
+LOCAL_BFCL="${_TOOL_USE_ENV_DIR}/berkeley-function-call-leaderboard"
 if [[ -d "${LOCAL_BFCL}" ]]; then
     export PYTHONPATH="${LOCAL_BFCL}:${PYTHONPATH:-}"
 fi

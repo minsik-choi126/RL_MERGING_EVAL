@@ -73,10 +73,25 @@ GPU_GROUPS+="]"
 
 EVAL_DIR="${SCRIPT_DIR}/evaluation"
 
+# Where LiveBench.json / LiveCodeBench.json live. Honor CODING_DATA_DIR if set,
+# otherwise default to <repo>/Coding/data. If the files are missing, abort early
+# with a helpful pointer rather than letting eval.py stack-trace.
+export CODING_DATA_DIR="${CODING_DATA_DIR:-${SCRIPT_DIR}/data}"
+for _ds in "${DATASETS[@]}"; do
+    _f="${CODING_DATA_DIR}/${_ds}.json"
+    if [[ ! -f "${_f}" ]]; then
+        echo "[ERROR] ${_f} not found." >&2
+        echo "        Set CODING_DATA_DIR to the directory containing ${_ds}.json," >&2
+        echo "        or drop/symlink the file into ${SCRIPT_DIR}/data/. See README §2." >&2
+        exit 1
+    fi
+done
+
 echo "============================================================"
 echo "  CURE Coding Evaluation"
 echo "  Model:      ${MODEL_PATH}"
 echo "  Datasets:   ${DATASETS[*]}"
+echo "  Data dir:   ${CODING_DATA_DIR}"
 echo "  GPU layout: ${GPU_GROUPS} (${NUM_ENGINES} engines x ${GPU_PER_ENGINE} GPUs)"
 echo "  Started:    $(date)"
 echo "============================================================"

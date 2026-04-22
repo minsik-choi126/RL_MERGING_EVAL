@@ -361,7 +361,15 @@ if single_eval:
 
 
 # read dataset
-with open("../data/" + dataset + ".json", 'r') as f:
+_data_dir = os.environ.get("CODING_DATA_DIR", "../data")
+_dataset_path = os.path.join(_data_dir, dataset + ".json")
+if not os.path.isfile(_dataset_path):
+    raise FileNotFoundError(
+        f"{dataset}.json not found at {_dataset_path}. "
+        f"Set CODING_DATA_DIR to the directory containing LiveBench.json / "
+        f"LiveCodeBench.json (see README §2)."
+    )
+with open(_dataset_path, "r") as f:
     data = json.load(f)
 #data = [data[i] for i in range(10)]
 num = len(data)

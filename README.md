@@ -59,7 +59,7 @@ Artefacts:
 | `./MemAgent/hotpotqa/eval_*.json`             | RULER HotpotQA at multiple distances    |
 | HuggingFace `google/IFEval` (on-the-fly load) | IFEval                                   |
 | BFCL package data (bundled)                   | Tool-use test cases                     |
-| CURE eval (downloads on first run)            | LiveBench / LiveCodeBench               |
+| `$CODING_DATA_DIR/{LiveBench,LiveCodeBench}.json` | CURE-formatted coding datasets — not auto-downloaded (5 GB combined). Obtain from the CURE eval repo and point `CODING_DATA_DIR` at their directory, or drop/symlink them into `./Coding/data/`. |
 
 **Models.** Pass any local directory with a valid `config.json`. Context length,
 `rope_scaling`, and attention-head layout are auto-detected.

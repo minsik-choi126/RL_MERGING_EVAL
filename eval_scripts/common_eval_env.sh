@@ -13,8 +13,10 @@
 set -euo pipefail
 
 # ── Resolve paths ──
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Use a namespaced variable here; callers often have their own SCRIPT_DIR and
+# sourcing this file used to clobber it.
+_CEE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${_CEE_DIR}/.." && pwd)"
 
 # ── VERL repo root (custom AIME reward functions live here) ──
 # If you have a local checkout, point NEMOTRON_REPO_ROOT at it. Otherwise the
