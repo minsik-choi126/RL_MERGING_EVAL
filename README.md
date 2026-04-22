@@ -221,9 +221,6 @@ cat results/run_001/summary.json
 Everything lands under `results/run_NNN/` (auto-incremented), with a
 `logs/<benchmark>.log` per benchmark for debugging.
 
-> If you share the GPUs with other jobs and IFEval hits an OOM during vLLM
-> startup, lower the memory budget: `IFEVAL_GPU_MEMORY_UTILIZATION=0.35`.
-
 ---
 
 ## Troubleshooting
