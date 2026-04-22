@@ -266,9 +266,11 @@ def run_inference(model_path: str, prompts: list, tp: int, max_tokens: int = 102
         model=model_path,
         tensor_parallel_size=tp,
         trust_remote_code=True,
-        dtype="float16",
-        gpu_memory_utilization=0.85,
-        max_model_len=4096,
+        dtype=os.environ.get("IFEVAL_DTYPE", "float16"),
+        gpu_memory_utilization=float(
+            os.environ.get("IFEVAL_GPU_MEMORY_UTILIZATION", "0.85")
+        ),
+        max_model_len=int(os.environ.get("IFEVAL_MAX_MODEL_LEN", "4096")),
     )
 
     # Get tokenizer from vLLM (avoids transformers version issues)
