@@ -1,0 +1,11 @@
+# models.txt — one model per line, format:
+#   <name>=<absolute_path_to_model> [prompt_mode=plain|tool]
+#
+# Used by run_tool_use_4x.sh. Lines starting with '#' and blank lines are
+# ignored. `prompt_mode` is optional (default: tool); use `plain` for models
+# that were NOT trained with tool-calling RL — they tend to score higher on
+# BFCL without the `<tools>` block in the prompt.
+
+Qwen2.5-7B-Instruct=/path/to/Qwen2.5-7B-Instruct prompt_mode=plain
+ToolRL-grpo-cold=/path/to/ToolRL-grpo-cold prompt_mode=tool
+my-merge=/path/to/my/merge prompt_mode=tool

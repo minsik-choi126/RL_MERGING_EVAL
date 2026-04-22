@@ -1,0 +1,50 @@
+# ── Local config / secrets ──
+config.env
+*.env.local
+.env
+.netrc
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual environments ──
+.eval/
+.venv/
+venv/
+env/
+
+# ── Results, caches, logs ──
+results/
+ifeval_results/
+tool_use_4x/
+*.log
+wandb/
+runs/
+
+# Third-party eval data / checkouts (user provides locally)
+data/
+MemAgent/hotpotqa/
+Coding/evaluation/temp_data/
+Coding/evaluation/results/
+Coding/data/
+Tool_use/berkeley-function-call-leaderboard/
+external/
+
+# ── Editors / OS ──
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ── Misc ──
+*.bak
+*.tmp
+*.swp
