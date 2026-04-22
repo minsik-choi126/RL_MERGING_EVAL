@@ -157,30 +157,72 @@ $OUTPUT_ROOT/<model>/evaluation_output/{aime24,aime25,aime26,ifeval}/
 Run number is auto-incremented from existing `run_NNN` dirs; override with
 `--run N`. Re-running the same benchmark overwrites in place.
 
-## 5. Worked example (A6000 × 4, coding benchmark)
+## 5. Worked examples (1.7B + 2×A6000 baseline)
+
+Baseline config: a 1.7B model on 2 GPUs, covering the three eval families
+(instruction-following, math, coding). All commands assume step 1 (setup) is
+done and the data files are in place.
 
 ```bash
-# 1) env
+# (common step 1 — once)
 git clone https://github.com/minsik-choi126/RL_MERGING_EVAL.git
 cd RL_MERGING_EVAL
-bash setup.sh                          # venv + pip deps + vLLM + VERL + data
-
-# 2) data (coding benches auto-download on first run; nothing extra here)
-
-# 3) eval — 7B model, 4×A6000 = 1 engine × TP4
-bash run_eval.sh \
-    --model /abs/path/to/Qwen2.5-7B-Instruct \
-    --benchmarks coding \
-    --gpu_per_engine 4
-
-# (for a 1.7B model on the same 4 GPUs use 4 engines × TP1:)
-# bash run_eval.sh --model /abs/path/to/Qwen3-1.7B --benchmarks coding --gpu_per_engine 1
-
-# 4) results
-cat results/run_001/Coding/*.txt        # ACC / UT for LiveBench + LiveCodeBench
-cat results/run_001/summary.json        # per-benchmark status + elapsed
-less results/run_001/logs/livebench.log # full stdout if something looks off
+bash setup.sh
+MODEL=/abs/path/to/Qwen3-1.7B     # <— replace with your 1.7B checkpoint
 ```
+
+### 5.1 IFEval (instruction following)
+
+```bash
+bash run_eval.sh --model $MODEL --benchmarks ifeval --tp 2
+
+# results
+cat $PWD/results/verl_outputs/$(basename $MODEL)/evaluation_output/ifeval/summary.json
+#   {prompt_level_strict_acc, inst_level_strict_acc, num_examples}
+```
+
+### 5.2 AIME math (AIME24 + 25 + 26)
+
+```bash
+bash run_eval.sh --model $MODEL --benchmarks aime24 aime25 aime26 --n_gpus 2
+
+# results — VERL writes per-variant evaluation outputs
+ls $PWD/results/verl_outputs/$(basename $MODEL)/evaluation_output/aime24/
+#   contains the val log + accuracy; scan for `val/test_score` in the log.
+cat results/run_001/summary.json | grep -A1 aime
+```
+
+### 5.3 Coding (LiveBench + LiveCodeBench)
+
+```bash
+# 1.7B on 2×A6000 → 2 engines × TP1 (2× parallel throughput):
+bash run_eval.sh --model $MODEL --benchmarks coding --gpu_per_engine 1
+
+# 7B variant on the same 2 GPUs → 1 engine × TP2:
+# bash run_eval.sh --model /abs/path/to/Qwen2.5-7B-Instruct \
+#     --benchmarks coding --gpu_per_engine 2
+
+# results
+cat results/run_001/Coding/*.txt          # ACC + UT for LiveBench + LiveCodeBench
+cat results/run_001/summary.json
+```
+
+### 5.4 All three at once
+
+```bash
+bash run_eval.sh --model $MODEL \
+    --benchmarks ifeval aime24 aime25 aime26 livebench livecodebench \
+    --tp 2 --n_gpus 2 --gpu_per_engine 1
+
+# aggregate
+cat results/run_001/summary.json
+```
+
+Everything lands under `results/run_NNN/` (auto-incremented), with a
+`logs/<benchmark>.log` per benchmark for debugging.
+
+> If you share the GPUs with other jobs and IFEval hits an OOM during vLLM
+> startup, lower the memory budget: `IFEVAL_GPU_MEMORY_UTILIZATION=0.35`.
 
 ---
 
