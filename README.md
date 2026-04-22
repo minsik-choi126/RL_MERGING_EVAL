@@ -157,6 +157,31 @@ $OUTPUT_ROOT/<model>/evaluation_output/{aime24,aime25,aime26,ifeval}/
 Run number is auto-incremented from existing `run_NNN` dirs; override with
 `--run N`. Re-running the same benchmark overwrites in place.
 
+## 5. Worked example (A6000 × 4, coding benchmark)
+
+```bash
+# 1) env
+git clone https://github.com/minsik-choi126/RL_MERGING_EVAL.git
+cd RL_MERGING_EVAL
+bash setup.sh                          # venv + pip deps + vLLM + VERL + data
+
+# 2) data (coding benches auto-download on first run; nothing extra here)
+
+# 3) eval — 7B model, 4×A6000 = 1 engine × TP4
+bash run_eval.sh \
+    --model /abs/path/to/Qwen2.5-7B-Instruct \
+    --benchmarks coding \
+    --gpu_per_engine 4
+
+# (for a 1.7B model on the same 4 GPUs use 4 engines × TP1:)
+# bash run_eval.sh --model /abs/path/to/Qwen3-1.7B --benchmarks coding --gpu_per_engine 1
+
+# 4) results
+cat results/run_001/Coding/*.txt        # ACC / UT for LiveBench + LiveCodeBench
+cat results/run_001/summary.json        # per-benchmark status + elapsed
+less results/run_001/logs/livebench.log # full stdout if something looks off
+```
+
 ---
 
 ## Troubleshooting

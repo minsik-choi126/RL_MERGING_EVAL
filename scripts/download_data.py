@@ -98,7 +98,7 @@ def download_memagent_hqa(memagent_root: Path, force: bool) -> None:
         print(f"  [memagent] already present → {dest}")
         return
 
-    repo_id = os.environ.get("MEMAGENT_HQA_REPO", "BytedTsinghua-SIA/MemAgent-Eval")
+    repo_id = os.environ.get("MEMAGENT_HQA_REPO", "BytedTsinghua-SIA/hotpotqa")
     print(f"  [memagent] downloading {repo_id} → {dest}")
     try:
         snapshot_download(
