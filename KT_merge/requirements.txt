@@ -1,0 +1,25 @@
+# KT-Merge Python dependencies
+#
+# Tested with:
+#   Python 3.10
+#   CUDA 12.8 (torch 2.10.0+cu128)
+#
+# torch / cuda — install matching your system from https://pytorch.org/get-started/
+# (the +cuXXX wheel index is required, plain `pip install torch` may give CPU-only)
+#
+# Example install (CUDA 12.8):
+#   pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+#   pip install -r requirements.txt
+#
+# Or, if torch is already installed in the env (typical for ML clusters), just:
+#   pip install -r requirements.txt   (skips torch install)
+
+# Core ML
+torch>=2.5,<3.0           # any 2.5+ wheel with matching CUDA works
+numpy>=1.24,<2.0          # 1.26.x tested; numpy 2.x has breaking changes for some torch versions
+transformers>=4.45,<5.0   # 4.57.6 tested
+safetensors>=0.4,<1.0     # 0.7.0 tested
+tqdm>=4.65
+
+# HuggingFace datasets — only used by Step 0a (download_training_data.py)
+datasets>=2.20,<5.0       # 4.7.0 tested
