@@ -21,9 +21,10 @@ pip install -r requirements.txt
 #    Each must contain *.safetensors + config.json + tokenizer.* (or be a symlink).
 
 # 2. Pick GPU(s)
-export CUDA_VISIBLE_DEVICES=0           # single GPU; use "0,1" for two GPUs
+export CUDA_VISIBLE_DEVICES=0           # single GPU is enough (default)
+                                        # CUDA_VISIBLE_DEVICES=0,1 only speeds up the optional 2-GPU prep_proxy path
 
-# 3. Full run: download → targets → proxy → W → merge × (1 ours + 12 baselines)
+# 3. Full run: download → targets → proxy → W_expert → merge × (1 ours + 12 baselines)
 nohup bash run_pipeline.sh > outputs/pipeline.log 2>&1 &
 tail -f outputs/pipeline.log
 ```
@@ -38,7 +39,7 @@ SKIP_MERGE=1                bash run_pipeline.sh   # build proxy + W only
 Hyperparameter overrides:
 
 ```bash
-THRESHOLD=0.5 EPS_SCALE=0.05 N_QUERIES=64 \
+KEY_TOP_FRAC=0.20 N_QUERIES=128 \
     bash run_pipeline.sh
 ```
 
@@ -53,16 +54,16 @@ data/training/{ifeval,math,coding}_raw.jsonl ← Step 0a (download)
 data/training/{ifeval,math,coding}.jsonl     ← Step 0b (expert targets)
             │
             ▼
-data/per_query/{ifeval,math,coding}.npz     ← Step 1 (teacher-force base+experts)
+data/per_query/{ifeval,math,coding}.npz      ← Step 1 (teacher-force base+experts)
             │
             ▼
-outputs/W_activation_positionkey_θ[_perexpert].npz ← Step 2 (Δ>θ events → row W)
+outputs/W_expert_top<pct>_perexpert.npz      ← Step 2 (per-expert top-K% W)
             │
             ▼
-outputs/merges/<method>/                    ← Step 3 (13 methods × 1 merge each)
+outputs/merges/<method>/                     ← Step 3 (13 methods × 1 merge each)
             │
             ▼
-external eval pipeline                      ← Step 4 (6 benches per merge)
+external eval pipeline                       ← Step 4 (6 benches per merge)
 ```
 
 ---
@@ -116,21 +117,28 @@ python scripts/prep_proxy_qwen3.py \
 > we leak eval signal into the merge. Using each expert's RL training
 > distribution is leak-free.
 
-### Step 2 — Compute per-row W ([`scripts/compute_W_activation_positionkey.py`](scripts/compute_W_activation_positionkey.py))
+### Step 2 — Compute W_expert ([`scripts/compute_W_expert.py`](scripts/compute_W_expert.py))
+
+Δlog p comes pre-computed from Step 1's per_query npz, so the base model
+is **not** re-loaded here. For each expert i (forwarded on its own task
+only), pick the top-K% answer positions ranked by
+Δlog p = log p_expert_i − log p_base (exact top-k via `argpartition`;
+default 20%) as the key set, then accumulate
 
 ```
-α(h) = 1 if max_{E ∈ {ifeval, math, coding}} (log p_E - log p_base)(h) > θ else 0
-W_raw_l[r] = Σ_h α(h) · |y_l(h, r)|             # row-wise activation magnitude at key h
-ε_l = eps_scale · median(W_raw_l)
-W_safe_l[r] = (W_raw_l[r] + ε_l) / (median + ε_l)
+W_expert[i, ℓ, r] = mean_{h ∈ key_i}  |y_expert_i(ℓ, h, r)|
 ```
+
+producing a per-layer 2D tensor of shape `(N=3, d_out)` indexed by
+`[ifeval, math, coding]`.
 
 ```bash
-python scripts/compute_W_activation_positionkey.py \
-    --threshold 0.1 --eps_scale 0.01 \
+python scripts/compute_W_expert.py \
+    --key_top_frac 0.20 \
+    --ifeval models/ifeval --math models/math --coding models/coding \
     --in_dir data/per_query \
-    --out outputs/W_activation_positionkey_0.1_perexpert.npz \
-    --per_expert
+    --out outputs/W_expert_top20_perexpert.npz \
+    --device cuda:0
 ```
 
 ### Step 3 — Merge (ours + baselines) ([`scripts/merge_baselines.sh`](scripts/merge_baselines.sh))
@@ -139,7 +147,7 @@ Runs 1 ours + 12 baselines = **13 merges total**, idempotent skip:
 
 | method | merge command |
 |---|---|
-| **ours: positionkey_<θ>** | `merge_ablation.py --variants kt_polar_renorm --w_file <W>` |
+| **ours: W_expert_top<pct>** | `merge_ablation.py --variants kt_polar_renorm --w_file <W>` |
 | task_arithmetic (1/N mean) | `merge.py --method task_arithmetic` |
 | ties / dare_ta / dare_ties | `merge.py --method ties|dare ...` |
 | star / cart / tsv | `merge.py --method <name> --device cuda:0` |
@@ -148,7 +156,8 @@ Runs 1 ours + 12 baselines = **13 merges total**, idempotent skip:
 | ram / ram_plus | `merge.py --method ram|ram_plus --device cuda:0` |
 
 Output: `outputs/merges/<method>/model.safetensors` per method. The default
-ours directory is `outputs/merges/positionkey_0.1/`.
+ours directory is `outputs/merges/W_expert_top20/` (symlink into the
+auto-detected ablation subdir).
 
 ### Step 4 — Evaluate (external)
 
@@ -161,12 +170,13 @@ ifeval, aime24, aime25, aime26, livebench, livecodebench.
 ## 3. GPU usage
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0          # 1 GPU
-export CUDA_VISIBLE_DEVICES=0,1        # 2 GPUs (faster)
+export CUDA_VISIBLE_DEVICES=0          # 1 GPU is sufficient (default)
+export CUDA_VISIBLE_DEVICES=0,1        # only Step 1 / merge baselines benefit
 ```
 
-`DEVICE` is the logical device passed to compute/merge scripts
-(default `cuda:0` — within the visible set).
+`DEVICE` is the logical device passed to every step (default `cuda:0`).
+Step 2 only forwards each expert (base activations are not needed — Δlog p
+is read from the per_query npz), so a single GPU is enough.
 
 ---
 
@@ -186,14 +196,14 @@ KT_merge/
 │   ├── training/{task}.jsonl          ← Stage 0b output (answers filled)
 │   └── per_query/{task}.npz           ← Step 1 output
 ├── outputs/
-│   ├── W_activation_positionkey_<θ>[_perexpert].npz   ← Step 2 output
-│   ├── merges/<method>/                               ← Step 3 output (13 dirs)
-│   └── merge_logs/                                    ← per-method logs
+│   ├── W_expert_top<pct>_perexpert.npz                   ← Step 2 output
+│   ├── merges/<method>/                                  ← Step 3 output (13 dirs)
+│   └── merge_logs/                                       ← per-method logs
 ├── scripts/
 │   ├── download_training_data.py    Stage 0a
 │   ├── generate_targets.py          Stage 0b
 │   ├── prep_proxy_qwen3.py          Step 1
-│   ├── compute_W_activation_positionkey.py    Step 2
+│   ├── compute_W_expert.py          Step 2
 │   ├── merge_ktpolar.py             Step 3 helpers
 │   ├── merge_ablation.py            Step 3 entry for ours
 │   ├── merge.py                     Step 3 baselines
@@ -211,11 +221,9 @@ KT_merge/
 | `BASE_MODEL` | `Qwen/Qwen3-1.7B` | HF id, auto-downloaded |
 | `N_QUERIES` | 128 | proxy queries per task |
 | `SEED` | 42 | sampling seed |
-| `THRESHOLD` | **0.1** | Δ in nats — tune so each expert lands in 10–20% key-position rate |
-| `EPS_SCALE` | 0.01 | additive ε relative to per-layer median |
+| `KEY_TOP_FRAC` | **0.20** | per-expert top-K fraction by Δlog p (exact top-k) |
 | `ENERGY` | 0.90 | KT-Truncation energy threshold |
-| `PER_EXPERT` | 1 | 1=per-expert W (2D, N×d_out); 0=union W (1D) |
-| `DEVICE` | `cuda:0` | logical device |
+| `DEVICE` | `cuda:0` | logical device for every step |
 
 ---
 

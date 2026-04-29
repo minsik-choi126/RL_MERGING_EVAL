@@ -97,13 +97,15 @@ def save_model(
         else:
             raise RuntimeError(f"tokenizer copy failed for: {base_model_path}")
 
-    weights_bf16 = {
-        k: v.to(torch.bfloat16) if v.dtype in (torch.float32, torch.float16) else v
+    # Save in fp32 to match the baseline merges in scripts/merge.py — keeps
+    # ours and baselines on the same dtype/footprint for fair evaluation.
+    weights_fp32 = {
+        k: v.to(torch.float32) if v.dtype in (torch.bfloat16, torch.float16) else v
         for k, v in merged_sd.items()
         if isinstance(v, torch.Tensor)
     }
     out_path = os.path.join(out_dir, "model.safetensors")
-    save_file(weights_bf16, out_path)
+    save_file(weights_fp32, out_path)
     print(f"  Saved {os.path.getsize(out_path)/1e9:.1f}GB → {out_dir}")
 
 

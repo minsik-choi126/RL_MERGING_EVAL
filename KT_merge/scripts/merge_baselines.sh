@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Merge ours (positionkey_<threshold>) + 12 baseline methods on Qwen3-1.7B + 3 RL experts.
+# Merge ours (W_expert_top<pct>) + 12 baseline methods on Qwen3-1.7B + 3 RL experts.
 #
 # All merges land under: $OUT_DIR/<method>/  (default: KT_merge/outputs/merges/)
 #
 # Methods (13 total):
-#   ours: positionkey_<threshold>
+#   ours: W_expert_top<pct>
 #   baselines: task_arithmetic, ties, dare_ta, dare_ties, star, cart, tsv,
 #              fisher, iso_c, iso_cts, ram, ram_plus
 #
 # Prereqs:
 #   - models/{ifeval,math,coding}/ symlinks present
 #   - data/per_query/{ifeval,math,coding}.npz present (run prep_proxy_qwen3.py)
-#   - outputs/W_activation_positionkey_<threshold>[_perexpert].npz present (compute_W_*.py)
+#   - outputs/W_expert_top<pct>_perexpert.npz present (compute_W_expert.py)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,9 +19,8 @@ ROOT="${HERE%/scripts}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
-THRESHOLD="${THRESHOLD:-0.1}"
-PER_EXPERT="${PER_EXPERT:-1}"
-_W_SUFFIX="$([ "${PER_EXPERT}" = "1" ] && echo "_perexpert" || echo "")"
+KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.20}"
+KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
 OUT_DIR="${OUT_DIR:-${ROOT}/outputs/merges}"
 LOG_DIR="${LOG_DIR:-${ROOT}/outputs/merge_logs}"
 
@@ -61,15 +60,14 @@ run() {  # run <tag> <python_command...>
 }
 
 # ── Ours ────────────────────────────────────────────────────────────────────
-# Use merge_ablation.py for ours (it auto-detects 1D vs 2D per-expert W and
-# applies the right kttrunc behavior). Variant kt_polar_renorm = positionkey_<threshold>
-# (kt-truncate + polar align + per-expert renorm).
-W_FILE="${W_FILE:-${ROOT}/outputs/W_activation_positionkey_${THRESHOLD}${_W_SUFFIX}.npz}"
+# Use merge_ablation.py for ours. Variant kt_polar_renorm with W_expert
+# (kt-truncate + polar align + per-expert renorm) is the headline method.
+W_FILE="${W_FILE:-${ROOT}/outputs/W_expert_top${KEY_TOP_PCT}_perexpert.npz}"
 if [ ! -f "${W_FILE}" ]; then
-    echo "[ERR] ${W_FILE} missing — run compute_W_activation_positionkey.py first" >&2
+    echo "[ERR] ${W_FILE} missing — run compute_W_expert.py first" >&2
     exit 1
 fi
-OURS_TAG="${OURS_TAG:-positionkey_${THRESHOLD}}"
+OURS_TAG="${OURS_TAG:-W_expert_top${KEY_TOP_PCT}}"
 ABL_ROOT="${OUT_DIR}/_ablation/${OURS_TAG}"
 ABL_OUT="${ABL_ROOT}/kt_polar_renorm"
 OURS_TARGET="${OUT_DIR}/${OURS_TAG}"

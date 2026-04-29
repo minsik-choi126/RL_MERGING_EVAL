@@ -72,6 +72,13 @@ RL_EXPERTS = {
     "coding": str(ROOT / "models" / "coding"),
 }
 
+# W_activation is collected from nn.Linear outputs. Embedding matrices are 2D
+# tensors in the state_dict, but they are not Linear modules and do not have a
+# matching W row-importance vector. Keep them on the fixed non-Linear TA-mean
+# path instead of letting KT variants fall back to unweighted SVD.
+NON_LINEAR_2D_KEYS = {"model.embed_tokens.weight"}
+MERGE_IMPL_VERSION = "2026-04-27-nonlinear2d-ta-mean"
+
 VARIANTS: dict[str, dict] = {
     "naive":            {"truncate": "none", "polar": False, "renorm": False},
     "svd":              {"truncate": "svd",  "polar": False, "renorm": False},
@@ -353,6 +360,7 @@ def run_variant(
         {"variant": variant, "flags": flags, "experts": expert_names,
          "energy": energy, "n_fallback_layers": n_fallback_layers,
          "n_2d_layers": len(keys_2d), "oned_policy": "mean",
+         "merge_impl_version": MERGE_IMPL_VERSION,
          "per_layer": per_layer_stats},
         open(out_dir / "layer_stats.json", "w"), indent=2,
     )
@@ -455,8 +463,17 @@ def main():
         out_dir = out_root / variant
         already = (out_dir / "model.safetensors").exists() or list(out_dir.glob("*.safetensors"))
         if args.skip_existing and already:
-            print(f"[skip] {variant}: {out_dir} already populated")
-            continue
+            stats_path = out_dir / "layer_stats.json"
+            existing_version = None
+            if stats_path.exists():
+                try:
+                    existing_version = json.load(open(stats_path)).get("merge_impl_version")
+                except Exception:
+                    existing_version = None
+            if existing_version == MERGE_IMPL_VERSION:
+                print(f"[skip] {variant}: {out_dir} already populated")
+                continue
+            print(f"[rebuild] {variant}: existing output predates merge_impl_version={MERGE_IMPL_VERSION}")
         plan.append((variant, out_dir))
 
     if args.dry_run:
@@ -482,7 +499,7 @@ def main():
         expert_sds[name] = load_state_dict(_resolve_model_path(RL_EXPERTS[name]))
         print(f"  done in {time.time()-t0:.1f}s")
 
-    two_d = get_2d_key_set(base_sd)
+    two_d = get_2d_key_set(base_sd) - NON_LINEAR_2D_KEYS
     keys_2d = sorted(two_d)
     print(f"[init] {len(keys_2d)} 2D layers")
 
@@ -518,6 +535,7 @@ def main():
     mf_path = out_root / "manifest.json"
     json.dump({"experts": expert_names, "energy": args.energy,
                "oned_policy": "mean",
+               "merge_impl_version": MERGE_IMPL_VERSION,
                "w_file": args.w_file if any(VARIANTS[v]["truncate"] == "kt"
                                              for v, _ in plan) else None,
                "variants": manifest},

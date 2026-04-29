@@ -3,8 +3,8 @@
 #
 #   Step 0: download HF prompts → generate targets → data/training/{ifeval,math,coding}.jsonl
 #   Step 1: prep proxy per_query npz from local training data
-#   Step 2: compute per-row W (position-level Δ>θ events)
-#   Step 3: merge ours (positionkey) + 12 baselines
+#   Step 2: compute W_expert (per-expert top-K% by Δlog p; default 20%)
+#   Step 3: merge ours (W_expert) + 12 baselines
 #
 # Evaluation (ifeval, aime24/25/26, livebench, livecodebench) is handled by
 # the user's existing eval pipeline — NOT this script. After Step 3 finishes,
@@ -13,11 +13,9 @@
 # Each step is idempotent: re-run skips already-built artifacts.
 #
 # ── GPU toggle ──────────────────────────────────────────────────────────────
-#   CUDA_VISIBLE_DEVICES=0       (default — pick any single GPU)
-#   CUDA_VISIBLE_DEVICES=0,1     expose two GPUs
-#   DEVICE=cuda:0                logical device passed to scripts
-#
-# Internally: prep_proxy, compute_W, and merge scripts use DEVICE.
+#   CUDA_VISIBLE_DEVICES=0       single GPU (default; everything on cuda:0)
+#   CUDA_VISIBLE_DEVICES=0,1     two GPUs (faster Step 1; Step 2 only uses one)
+#   DEVICE=cuda:0                logical device for prep_proxy + merge + Step 2
 #
 # ── Step toggles ────────────────────────────────────────────────────────────
 #   SKIP_DOWNLOAD=1     skip step 0a (raw jsonl must already exist)
@@ -30,26 +28,8 @@
 #   BASE_MODEL=Qwen/Qwen3-1.7B    HF id of base
 #   N_QUERIES=128                 proxy queries per task for log-prob extraction
 #   SEED=42                       sampling seed
-#   THRESHOLD=0.1                 position-level Δ key threshold (see guide below)
-#   EPS_SCALE=0.01                W ε-add scale
+#   KEY_TOP_FRAC=0.20             per-expert top-K fraction by Δlog p (default 20%)
 #   ENERGY=0.90                   KT-Truncation energy threshold
-#   PER_EXPERT=1                  1=per-expert W (2D, N×d_out); 0=union W (1D)
-#
-# ── THRESHOLD GUIDE for Qwen3-1.7B ──────────────────────────────────────────
-# Δ distribution depends on the base + experts; tune so each expert's own-data
-# key-position rate falls in the 10–20% band.
-#
-#   1. Run with default THRESHOLD=0.1 once. Step 2 prints per-expert rates:
-#        [per-expert mask] ifeval  (ifeval): NNNN/NNNNN (XX.X%)
-#        [per-expert mask] math    (math)  : NNNN/NNNNN (XX.X%)
-#        [per-expert mask] coding  (coding): NNNN/NNNNN (XX.X%)
-#   2. Adjust:
-#        rates >25%  → raise THRESHOLD (try 0.2, 0.3, 0.5)
-#        rates <5%   → lower THRESHOLD (try 0.05, 0.02)
-#   3. Re-run Step 2 only with the new threshold:
-#        SKIP_DOWNLOAD=1 SKIP_PREP=1 SKIP_MERGE=1 \
-#        THRESHOLD=<new> bash run_pipeline.sh
-#   4. Once each expert lands in 10–20%, re-merge using the chosen W file.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,13 +41,11 @@ OUTPUTS_DIR="${HERE}/outputs"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 N_QUERIES="${N_QUERIES:-128}"
 SEED="${SEED:-42}"
-THRESHOLD="${THRESHOLD:-0.1}"
-EPS_SCALE="${EPS_SCALE:-0.01}"
+KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.20}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
-PER_EXPERT="${PER_EXPERT:-1}"      # 1 = per-expert W (2D, N×d_out); 0 = union W (1D, d_out)
-_W_SUFFIX="$([ "${PER_EXPERT}" = "1" ] && echo "_perexpert" || echo "")"
-W_FILE="${OUTPUTS_DIR}/W_activation_positionkey_${THRESHOLD}${_W_SUFFIX}.npz"
+KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
+W_FILE="${OUTPUTS_DIR}/W_expert_top${KEY_TOP_PCT}_perexpert.npz"
 
 mkdir -p "${TRAINING_DIR}" "${PER_QUERY_DIR}" "${OUTPUTS_DIR}"
 
@@ -78,8 +56,8 @@ echo "  BASE_MODEL          : ${BASE_MODEL}"
 echo "  CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-(unset; use any)}"
 echo "  DEVICE              : ${DEVICE}"
 echo "  N_QUERIES / SEED    : ${N_QUERIES} / ${SEED}"
-echo "  THRESHOLD / EPS / E : ${THRESHOLD} / ${EPS_SCALE} / ${ENERGY}"
-echo "  PER_EXPERT          : ${PER_EXPERT}"
+echo "  KEY_TOP_FRAC        : ${KEY_TOP_FRAC}  (top ${KEY_TOP_PCT}% per expert)"
+echo "  ENERGY              : ${ENERGY}"
 echo "  W_FILE              : ${W_FILE}"
 echo ""
 echo "  step toggles: SKIP_DOWNLOAD=${SKIP_DOWNLOAD:-0} SKIP_PREP=${SKIP_PREP:-0}"
@@ -136,27 +114,18 @@ else
     echo "── Step 1: SKIPPED (SKIP_PREP=1)"
 fi
 
-# ── Step 2: compute W ───────────────────────────────────────────────────────
+# ── Step 2: compute W_expert (per-expert top-K% activation magnitudes) ──────
 if [ "${SKIP_COMPUTE_W:-0}" != "1" ]; then
     echo ""
-    echo "── Step 2: compute W (Δ>${THRESHOLD}, per_expert=${PER_EXPERT}) ──"
-    PE_FLAG=""
-    [ "${PER_EXPERT}" = "1" ] && PE_FLAG="--per_expert"
-    python "${SCRIPTS}/compute_W_activation_positionkey.py" \
-        --threshold "${THRESHOLD}" \
-        --eps_scale "${EPS_SCALE}" \
+    echo "── Step 2: compute W_expert (top ${KEY_TOP_PCT}% per expert) ──"
+    python "${SCRIPTS}/compute_W_expert.py" \
+        --key_top_frac "${KEY_TOP_FRAC}" \
+        --ifeval "${HERE}/models/ifeval" \
+        --math   "${HERE}/models/math" \
+        --coding "${HERE}/models/coding" \
         --device "${DEVICE}" \
         --in_dir "${PER_QUERY_DIR}" \
-        --out "${W_FILE}" \
-        ${PE_FLAG}
-    echo ""
-    echo "  >>> THRESHOLD GUIDE (Qwen3-1.7B):"
-    echo "      Look at the 'key positions' percentages printed above per expert."
-    echo "      Pick THRESHOLD so that each expert's own-data key rate is ~10-20%."
-    echo "      If too high (>30%) → raise THRESHOLD (try 0.2, 0.3, 0.5)."
-    echo "      If too low (<5%)   → lower  THRESHOLD (try 0.05, 0.02)."
-    echo "      Re-run Step 2 with: SKIP_DOWNLOAD=1 SKIP_PREP=1 SKIP_MERGE=1 \\"
-    echo "                          THRESHOLD=<new> bash run_pipeline.sh"
+        --out "${W_FILE}"
 else
     echo ""
     echo "── Step 2: SKIPPED (SKIP_COMPUTE_W=1)"
@@ -168,8 +137,7 @@ if [ "${SKIP_MERGE:-0}" != "1" ]; then
     echo "── Step 3: merge ours + baselines ──"
     BASE_MODEL="${BASE_MODEL}" \
     W_FILE="${W_FILE}" \
-    THRESHOLD="${THRESHOLD}" \
-    PER_EXPERT="${PER_EXPERT}" \
+    KEY_TOP_FRAC="${KEY_TOP_FRAC}" \
     ENERGY="${ENERGY}" \
     DEVICE="${DEVICE}" \
     OUT_DIR="${OUTPUTS_DIR}/merges" \

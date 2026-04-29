@@ -2406,10 +2406,14 @@ def run_ram_plus(
     overlap_ratios = []
     rescales = []
     for j in range(n):
-        if changed_counts[j] == 0:
+        denom = changed_counts[j] - overlap_counts[j]
+        if changed_counts[j] == 0 or denom <= 0:
+            # All changed weights overlap with another expert (or no changes
+            # detected): no "exclusive change" mass left, so collapse the
+            # rescale toward 1.0 instead of dividing by zero.
             ratio = 0.0
         else:
-            ratio = overlap_counts[j] / (changed_counts[j] - overlap_counts[j])
+            ratio = overlap_counts[j] / denom
         overlap_ratios.append(ratio)
 
         rescale_j = 1.0 + (r - 1.0) * min(2, min(1.0, float(ratio)))
