@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Merge ours (W_expert_top<pct>) + 12 baseline methods on Qwen3-1.7B + 3 RL experts.
+# Merge ours (W_expert_top<pct>) + 9 baseline methods on Qwen3-1.7B + 3 RL experts.
 #
 # All merges land under: $OUT_DIR/<method>/  (default: KT_merge/outputs/merges/)
 #
-# Methods (13 total):
+# Methods (10 total):
 #   ours: W_expert_top<pct>
-#   baselines: task_arithmetic, ties, dare_ta, dare_ties, star, cart, tsv,
-#              fisher, iso_c, iso_cts, ram, ram_plus
+#   baselines: task_arithmetic, ties, dare_ta, star, tsv,
+#              iso_c, iso_cts, ram, ram_plus
 #
 # Prereqs:
 #   - models/{ifeval,math,coding}/ symlinks present
@@ -19,6 +19,7 @@ ROOT="${HERE%/scripts}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
+TIES_DEVICE="${TIES_DEVICE:-${DEVICE}}"   # set to "cpu" to avoid OOM on TIES / DARE_TIES (both flatten all params)
 KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.20}"
 KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
 OUT_DIR="${OUT_DIR:-${ROOT}/outputs/merges}"
@@ -130,13 +131,10 @@ fi
 # Each baseline method runs once with all 3 experts → 3-way merge.
 BASELINES=(
     "task_arithmetic     --method task_arithmetic"
-    "ties                --method ties --device ${DEVICE}"
+    "ties                --method ties --device ${TIES_DEVICE}"
     "dare_ta             --method dare --dare_merge_method task_arithmetic --device ${DEVICE}"
-    "dare_ties           --method dare --dare_merge_method ties --device ${DEVICE}"
     "star                --method star --device ${DEVICE}"
-    "cart                --method cart --device ${DEVICE}"
     "tsv                 --method tsv --device ${DEVICE}"
-    "fisher              --method fisher --fisher_device ${DEVICE}"
     "iso_c               --method iso_c --device ${DEVICE}"
     "iso_cts             --method iso_cts --device ${DEVICE}"
     "ram                 --method ram --device ${DEVICE}"
