@@ -28,7 +28,8 @@
 #   BASE_MODEL=Qwen/Qwen3-1.7B    HF id of base
 #   N_QUERIES=128                 proxy queries per task for log-prob extraction
 #   SEED=42                       sampling seed
-#   KEY_TOP_FRAC=0.20             per-expert top-K fraction by Δlog p (default 20%)
+#   KEY_TOP_FRAC=0.05             per-expert BOTTOM-K fraction by Δlog p (default 5%)
+#                                 (anti-key positions where expert under-performs base)
 #   ENERGY=0.90                   KT-Truncation energy threshold
 set -euo pipefail
 
@@ -41,11 +42,11 @@ OUTPUTS_DIR="${HERE}/outputs"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 N_QUERIES="${N_QUERIES:-128}"
 SEED="${SEED:-42}"
-KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.20}"
+KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.05}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
 KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
-W_FILE="${OUTPUTS_DIR}/W_expert_top${KEY_TOP_PCT}_perexpert.npz"
+W_COL_FILE="${OUTPUTS_DIR}/W_col_neg_top${KEY_TOP_PCT}_perexpert.npz"
 
 mkdir -p "${TRAINING_DIR}" "${PER_QUERY_DIR}" "${OUTPUTS_DIR}"
 
@@ -56,9 +57,9 @@ echo "  BASE_MODEL          : ${BASE_MODEL}"
 echo "  CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-(unset; use any)}"
 echo "  DEVICE              : ${DEVICE}"
 echo "  N_QUERIES / SEED    : ${N_QUERIES} / ${SEED}"
-echo "  KEY_TOP_FRAC        : ${KEY_TOP_FRAC}  (top ${KEY_TOP_PCT}% per expert)"
+echo "  KEY_TOP_FRAC        : ${KEY_TOP_FRAC}  (BOTTOM ${KEY_TOP_PCT}% per expert)"
 echo "  ENERGY              : ${ENERGY}"
-echo "  W_FILE              : ${W_FILE}"
+echo "  W_COL_FILE          : ${W_COL_FILE}"
 echo ""
 echo "  step toggles: SKIP_DOWNLOAD=${SKIP_DOWNLOAD:-0} SKIP_PREP=${SKIP_PREP:-0}"
 echo "                SKIP_COMPUTE_W=${SKIP_COMPUTE_W:-0} SKIP_MERGE=${SKIP_MERGE:-0}"
@@ -114,18 +115,18 @@ else
     echo "── Step 1: SKIPPED (SKIP_PREP=1)"
 fi
 
-# ── Step 2: compute W_expert (per-expert top-K% activation magnitudes) ──────
+# ── Step 2: compute W_col (column-side, BOTTOM-K% by Δlogp, × ‖W[:,c]‖) ─────
 if [ "${SKIP_COMPUTE_W:-0}" != "1" ]; then
     echo ""
-    echo "── Step 2: compute W_expert (top ${KEY_TOP_PCT}% per expert) ──"
-    python "${SCRIPTS}/compute_W_expert.py" \
+    echo "── Step 2: compute W_col (bottom ${KEY_TOP_PCT}% per expert, with ‖W[:,c]‖ factor) ──"
+    python "${SCRIPTS}/compute_W_col.py" \
         --key_top_frac "${KEY_TOP_FRAC}" \
         --ifeval "${HERE}/models/ifeval" \
         --math   "${HERE}/models/math" \
         --coding "${HERE}/models/coding" \
         --device "${DEVICE}" \
         --in_dir "${PER_QUERY_DIR}" \
-        --out "${W_FILE}"
+        --out "${W_COL_FILE}"
 else
     echo ""
     echo "── Step 2: SKIPPED (SKIP_COMPUTE_W=1)"
@@ -136,7 +137,7 @@ if [ "${SKIP_MERGE:-0}" != "1" ]; then
     echo ""
     echo "── Step 3: merge ours + baselines ──"
     BASE_MODEL="${BASE_MODEL}" \
-    W_FILE="${W_FILE}" \
+    W_COL_FILE="${W_COL_FILE}" \
     KEY_TOP_FRAC="${KEY_TOP_FRAC}" \
     ENERGY="${ENERGY}" \
     DEVICE="${DEVICE}" \

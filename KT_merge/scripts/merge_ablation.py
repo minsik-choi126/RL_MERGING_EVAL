@@ -84,9 +84,15 @@ VARIANTS: dict[str, dict] = {
     "svd":              {"truncate": "svd",  "polar": False, "renorm": False},
     "svd_polar":        {"truncate": "svd",  "polar": True,  "renorm": False},
     "svd_polar_renorm": {"truncate": "svd",  "polar": True,  "renorm": True},
-    "kt":               {"truncate": "kt",   "polar": False, "renorm": False},
-    "kt_polar":         {"truncate": "kt",   "polar": True,  "renorm": False},
-    "kt_polar_renorm":  {"truncate": "kt",   "polar": True,  "renorm": True},
+    "kt":               {"truncate": "kt",   "polar": False, "renorm": False, "kt_mode": "row"},
+    "kt_polar":         {"truncate": "kt",   "polar": True,  "renorm": False, "kt_mode": "row"},
+    "kt_polar_renorm":  {"truncate": "kt",   "polar": True,  "renorm": True,  "kt_mode": "row"},
+    "ktcol":               {"truncate": "kt", "polar": False, "renorm": False, "kt_mode": "col"},
+    "ktcol_polar":         {"truncate": "kt", "polar": True,  "renorm": False, "kt_mode": "col"},
+    "ktcol_polar_renorm":  {"truncate": "kt", "polar": True,  "renorm": True,  "kt_mode": "col"},
+    "kt2s":               {"truncate": "kt", "polar": False, "renorm": False, "kt_mode": "2s"},
+    "kt2s_polar":         {"truncate": "kt", "polar": True,  "renorm": False, "kt_mode": "2s"},
+    "kt2s_polar_renorm":  {"truncate": "kt", "polar": True,  "renorm": True,  "kt_mode": "2s"},
 }
 
 # 1D-layer treatment is FIXED to TA mean across all 7 variants so the
@@ -133,35 +139,37 @@ def _resvd_for_polar(tau_k: torch.Tensor, K_hint: int):
            Vh[:K_eff, :].T.contiguous(), K_eff
 
 
+def _split_per_expert(W: torch.Tensor | None, N: int):
+    if W is None: return [None] * N
+    if W.ndim == 2:
+        if W.shape[0] != N:
+            raise ValueError(f"per-expert W has {W.shape[0]} rows but {N} experts")
+        return [W[i] for i in range(N)]
+    return [W] * N
+
+
 def merge_one_layer(
     taus: list[torch.Tensor], energy: float, device: str, *,
-    truncate: str, polar: bool, renorm: bool,
+    truncate: str, polar: bool, renorm: bool, kt_mode: str = "row",
     W_row: torch.Tensor | None = None,
+    W_col: torch.Tensor | None = None,
 ):
-    """Single 2D-layer merge under a (truncate, polar, renorm) configuration.
-
-    W_row supports two shapes for the 'kt' path:
-        - 1D (d_out,)       : shared W across all experts (union calibration)
-        - 2D (N, d_out)     : per-expert W; row i used for expert i
-                               (per-expert calibration; rows in RL_EXPERT_NAMES order)
-
-    Returns (merged_tau on device, list[stats] of length N).
-    """
+    """Single 2D-layer merge under a (truncate, polar, renorm, kt_mode) configuration."""
     N = len(taus)
     fro_full = [float(t.norm().item()) for t in taus]
     d_out, d_in = taus[0].shape
 
-    # Pre-resolve per-expert W rows for kt path
-    if truncate == "kt" and W_row is not None and W_row.ndim == 2:
-        if W_row.shape[0] != N:
-            raise ValueError(
-                f"per-expert W has {W_row.shape[0]} rows but {N} experts; "
-                f"shape={tuple(W_row.shape)}")
-        W_per_expert: list[torch.Tensor | None] = [W_row[i] for i in range(N)]
-    elif truncate == "kt" and W_row is not None:
-        W_per_expert = [W_row] * N           # shared 1D W
-    else:
-        W_per_expert = [None] * N            # not used (svd / naive)
+    # Mask out unused W per kt_mode
+    if truncate != "kt":
+        W_row = W_col = None
+    elif kt_mode == "row": W_col = None
+    elif kt_mode == "col": W_row = None
+    elif kt_mode == "2s":  pass
+    else: raise ValueError(f"unknown kt_mode: {kt_mode}")
+
+    Wrow_per = _split_per_expert(W_row, N)
+    Wcol_per = _split_per_expert(W_col, N)
+    W_per_expert = Wrow_per   # backward-compat alias for kt-row path
 
     # ── Naive sum: no truncation, no polar, no renorm ──────────────────────
     if truncate == "none":
@@ -183,7 +191,10 @@ def merge_one_layer(
                         "energy_preserved": energy_pres,
                         "fro_full": fro_full[i], "fro_trunc": float(tau_k.norm().item())}
         elif truncate == "kt":
-            tau_kw, ks = kttrunc_per_expert(tau, W_per_expert[i], energy, device)
+            tau_kw, ks = kttrunc_per_expert(
+                tau, Wrow_per[i], energy, device, W_col=Wcol_per[i],
+            )
+            ks["kt_mode"] = kt_mode
             if ks["k"] == 0:
                 per_expert.append({"k": 0, "stats": ks, "fro_full": fro_full[i]})
                 continue
@@ -281,15 +292,20 @@ def run_variant(
     base_sd: dict, two_d: set, keys_2d: list[str],
     W_act_per_layer: dict | None,
     energy: float, device: str, out_dir: Path,
+    W_col_per_layer: dict | None = None,
 ):
     flags = VARIANTS[variant]
     truncate, polar, renorm = flags["truncate"], flags["polar"], flags["renorm"]
-    needs_W = (truncate == "kt")
-    if needs_W and W_act_per_layer is None:
-        raise RuntimeError(f"variant {variant} requires W_act_per_layer (kt path)")
+    kt_mode = flags.get("kt_mode", "row")
+    needs_Wrow = (truncate == "kt") and (kt_mode in ("row", "2s"))
+    needs_Wcol = (truncate == "kt") and (kt_mode in ("col", "2s"))
+    if needs_Wrow and W_act_per_layer is None:
+        raise RuntimeError(f"variant {variant} (kt_mode={kt_mode}) requires --w_file")
+    if needs_Wcol and W_col_per_layer is None:
+        raise RuntimeError(f"variant {variant} (kt_mode={kt_mode}) requires --w_col_file")
     print(f"\n========= variant={variant}  "
           f"truncate={truncate}  polar={polar}  renorm={renorm}  "
-          f"1D=mean (fixed) =========")
+          f"kt_mode={kt_mode}  1D=mean (fixed) =========")
 
     merged_sd: dict[str, torch.Tensor] = {}
 
@@ -317,25 +333,27 @@ def run_variant(
         W_base = base_sd[key].float().to(device)
         taus = [expert_sds[n][key].float().to(device) - W_base for n in expert_names]
 
-        W_row = None
-        if needs_W:
-            arr = W_act_per_layer.get(key)
-            if arr is None:
-                W_row = None
-                n_fallback_layers += 1
-            elif arr.ndim == 1 and arr.shape[0] == W_base.shape[0]:
-                # shared 1D W (union calibration)
-                W_row = torch.from_numpy(arr).float()
-            elif arr.ndim == 2 and arr.shape[1] == W_base.shape[0]:
-                # per-expert 2D W (N, d_out) — auto-detected
-                W_row = torch.from_numpy(arr).float()
-            else:
-                W_row = None
-                n_fallback_layers += 1
+        d_out_l, d_in_l = W_base.shape
+
+        def _resolve_W(side_per_layer, axis_size):
+            if side_per_layer is None: return None, False
+            arr = side_per_layer.get(key)
+            if arr is None: return None, True
+            if arr.ndim == 1 and arr.shape[0] == axis_size:
+                return torch.from_numpy(arr).float(), False
+            if arr.ndim == 2 and arr.shape[1] == axis_size:
+                return torch.from_numpy(arr).float(), False
+            return None, True
+
+        W_row, fb_r = _resolve_W(W_act_per_layer if needs_Wrow else None, d_out_l)
+        W_col, fb_c = _resolve_W(W_col_per_layer if needs_Wcol else None, d_in_l)
+        if fb_r or fb_c:
+            n_fallback_layers += 1
 
         merged_tau, stats_list = merge_one_layer(
             taus, energy, device,
-            truncate=truncate, polar=polar, renorm=renorm, W_row=W_row,
+            truncate=truncate, polar=polar, renorm=renorm, kt_mode=kt_mode,
+            W_row=W_row, W_col=W_col,
         )
         for i, s in enumerate(stats_list):
             s = dict(s) if s else {}
@@ -402,7 +420,9 @@ def main():
                           f"choices: {','.join(VARIANTS)}")
     ap.add_argument("--energy", type=float, default=0.90)
     ap.add_argument("--w_file", default=str(DEFAULT_W_FILE),
-                     help="W_activation file for kt variants")
+                     help="W_activation row file (d_out per layer) for kt row/2s variants")
+    ap.add_argument("--w_col_file", default=None,
+                     help="W_activation column file (d_in per layer) for kt col/2s variants")
     ap.add_argument("--experts", default=",".join(RL_EXPERTS),
                      help="comma-separated subset of experts (default: all 3)")
     ap.add_argument("--device", default="cuda:0")
@@ -503,20 +523,29 @@ def main():
     keys_2d = sorted(two_d)
     print(f"[init] {len(keys_2d)} 2D layers")
 
-    # ── Load W only if any planned variant needs it ─────────────────────────
-    needs_W = any(VARIANTS[v]["truncate"] == "kt" for v, _ in plan)
-    W_act_per_layer = None
-    if needs_W:
-        w_path = Path(args.w_file)
-        if not w_path.exists():
-            raise FileNotFoundError(f"W file missing: {w_path}")
-        print(f"[load] W_activation from {w_path}")
-        W_act_per_layer = dict(np.load(w_path))
-        print(f"  {len(W_act_per_layer)} layers   (sample dynamic ranges:)")
-        for sample_key in list(W_act_per_layer.keys())[:3]:
-            w = W_act_per_layer[sample_key]
+    # ── Load W (row/col) only if any planned variant needs them ─────────────
+    kt_modes = {VARIANTS[v].get("kt_mode", "row")
+                for v, _ in plan if VARIANTS[v]["truncate"] == "kt"}
+    needs_Wrow = any(m in ("row", "2s") for m in kt_modes)
+    needs_Wcol = any(m in ("col", "2s") for m in kt_modes)
+
+    def _load_W(label, path_str):
+        if path_str is None:
+            raise FileNotFoundError(f"{label} required but not set")
+        p = Path(path_str)
+        if not p.exists(): raise FileNotFoundError(f"{label} missing: {p}")
+        print(f"[load] {label} from {p}")
+        d = dict(np.load(p))
+        print(f"  {len(d)} layers")
+        for sample_key in list(d.keys())[:3]:
+            w = d[sample_key]
             p50 = np.percentile(w, 50); p99 = np.percentile(w, 99)
-            print(f"    {sample_key:<55}  p50={p50:.2e}  p99/p50={p99/max(p50,1e-12):.2f}")
+            print(f"    {sample_key:<55}  shape={w.shape}  "
+                  f"p50={p50:.2e}  p99/p50={p99/max(p50,1e-12):.2f}")
+        return d
+
+    W_act_per_layer = _load_W("w_file (row)", args.w_file) if needs_Wrow else None
+    W_col_per_layer = _load_W("w_col_file (col)", args.w_col_file) if needs_Wcol else None
 
     # ── Run each variant sequentially ───────────────────────────────────────
     manifest = []
@@ -526,6 +555,7 @@ def main():
             variant=variant, expert_names=expert_names,
             expert_sds=expert_sds, base_sd=base_sd, two_d=two_d, keys_2d=keys_2d,
             W_act_per_layer=W_act_per_layer,
+            W_col_per_layer=W_col_per_layer,
             energy=args.energy, device=device, out_dir=out_dir,
         )
         manifest.append(info)
@@ -536,8 +566,8 @@ def main():
     json.dump({"experts": expert_names, "energy": args.energy,
                "oned_policy": "mean",
                "merge_impl_version": MERGE_IMPL_VERSION,
-               "w_file": args.w_file if any(VARIANTS[v]["truncate"] == "kt"
-                                             for v, _ in plan) else None,
+               "w_file":     args.w_file     if needs_Wrow else None,
+               "w_col_file": args.w_col_file if needs_Wcol else None,
                "variants": manifest},
               open(mf_path, "w"), indent=2)
     print(f"[done] manifest → {mf_path}")

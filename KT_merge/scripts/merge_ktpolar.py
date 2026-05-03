@@ -73,57 +73,71 @@ def polar_factor(X: torch.Tensor) -> torch.Tensor:
 
 
 def kttrunc_per_expert(tau: torch.Tensor, W_row: torch.Tensor | None,
-                         energy: float, device: str):
-    """Weighted-SVD truncation: low-rank approximation that minimises
-    W-weighted Frobenius error.
+                         energy: float, device: str,
+                         *, W_col: torch.Tensor | None = None):
+    """Weighted-SVD truncation under a (D_row, D_col) diagonal weighting on
+    opposite axes.
 
-        Y   = diag(W^(1/2)) · τ                 (row-weight)
-        Y   = U_y · Σ_y · V_y^T
-        K   = smallest k s.t. Σ_{j≤k} σ_{y,j}² ≥ energy · Σ σ_{y,j}²
-        Y^(K) = U_y[:,:K] · diag(σ_y[:K]) · V_y[:K,:]
-        τ^(K,W) = diag(W^(-1/2)) · Y^(K)
+        Y       = D_row^(1/2) · τ · D_col^(1/2)
+        Y       = U_y · Σ_y · V_y^T
+        K       = smallest k s.t. Σ_{j≤k} σ_{y,j}² ≥ energy · Σ σ_{y,j}²
+        Y^(K)   = U_y[:,:K] · diag(σ_y[:K]) · V_y[:K,:]
+        τ^(K,W) = D_row^(-1/2) · Y^(K) · D_col^(-1/2)
 
-    Returns (τ^(K,W) on `device`, stats).  W_row=None falls back to standard
-    energy-based SVD truncation (unweighted).
+    Either side may be None — that side is skipped. Both None ⇒ standard SVD.
+    Shape-mismatched W is silently dropped on its own side.
     """
     t = tau.to(device)
     fro_full = float(t.norm().item())
-    max_k = int(min(t.shape))
+    d_out, d_in = t.shape
+    max_k = int(min(d_out, d_in))
+
+    Wr_sqrt = None
+    if W_row is not None:
+        Wr = W_row.to(device).clamp_min(1e-12)
+        if Wr.numel() == d_out:
+            Wr_sqrt = Wr.sqrt().reshape(d_out, 1)
+    Wc_sqrt = None
+    if W_col is not None:
+        Wc = W_col.to(device).clamp_min(1e-12)
+        if Wc.numel() == d_in:
+            Wc_sqrt = Wc.sqrt().reshape(1, d_in)
+
+    weighted = (Wr_sqrt is not None) or (Wc_sqrt is not None)
     if fro_full <= 1e-12:
         return torch.zeros_like(t), {
             "k": 0, "max_k": max_k, "energy_preserved": 0.0,
-            "fro_full": 0.0, "fro_trunc": 0.0, "kt_weighted": W_row is not None,
-            "note": "zero_layer",
+            "fro_full": 0.0, "fro_trunc": 0.0,
+            "kt_row": Wr_sqrt is not None,
+            "kt_col": Wc_sqrt is not None,
+            "kt_weighted": weighted, "note": "zero_layer",
         }
-    if W_row is None:
-        U, S, Vh = torch.linalg.svd(t, full_matrices=False)
-        sigma2 = (S * S).cpu().numpy()
-        cum = np.cumsum(sigma2) / max(sigma2.sum(), 1e-12)
-        K = int(np.searchsorted(cum, energy) + 1)
-        K = min(K, len(S))
-        τ_k = (U[:, :K] * S[:K].unsqueeze(0)) @ Vh[:K, :]
-        note = "standard_svd"
-    else:
-        W_sqrt = W_row.to(device).clamp_min(1e-12).sqrt().unsqueeze(1)   # (d_out,1)
-        if W_sqrt.shape[0] != t.shape[0]:
-            # size mismatch — fall back to unweighted
-            return kttrunc_per_expert(tau, None, energy, device)
-        Y = W_sqrt * t
-        Uy, Sy, Vhy = torch.linalg.svd(Y, full_matrices=False)
-        sigma2 = (Sy * Sy).cpu().numpy()
-        cum = np.cumsum(sigma2) / max(sigma2.sum(), 1e-12)
-        K = int(np.searchsorted(cum, energy) + 1)
-        K = min(K, len(Sy))
-        Y_k = (Uy[:, :K] * Sy[:K].unsqueeze(0)) @ Vhy[:K, :]
-        τ_k = Y_k / W_sqrt
-        del Uy, Sy, Vhy, Y, Y_k
-        note = "weighted_svd"
+
+    Y = t
+    if Wr_sqrt is not None: Y = Wr_sqrt * Y
+    if Wc_sqrt is not None: Y = Y * Wc_sqrt
+
+    Uy, Sy, Vhy = torch.linalg.svd(Y, full_matrices=False)
+    sigma2 = (Sy * Sy).cpu().numpy()
+    cum = np.cumsum(sigma2) / max(sigma2.sum(), 1e-12)
+    K = int(np.searchsorted(cum, energy) + 1)
+    K = min(K, len(Sy))
+    Y_k = (Uy[:, :K] * Sy[:K].unsqueeze(0)) @ Vhy[:K, :]
+
+    τ_k = Y_k
+    if Wr_sqrt is not None: τ_k = τ_k / Wr_sqrt
+    if Wc_sqrt is not None: τ_k = τ_k / Wc_sqrt
+
+    note = "weighted_svd" if weighted else "standard_svd"
     fro_trunc = float(τ_k.norm().item())
+    del Uy, Sy, Vhy, Y, Y_k
     return τ_k, {
         "k": K, "max_k": max_k,
         "energy_preserved_weighted": float(cum[K - 1]),
         "fro_full": fro_full, "fro_trunc": fro_trunc,
-        "kt_weighted": W_row is not None, "note": note,
+        "kt_row": Wr_sqrt is not None,
+        "kt_col": Wc_sqrt is not None,
+        "kt_weighted": weighted, "note": note,
     }
 
 

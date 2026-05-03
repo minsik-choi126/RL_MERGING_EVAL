@@ -1,7 +1,8 @@
 # KT-Merge — Qwen3-1.7B 3-Way RL Expert Merging Pipeline
 
 End-to-end recipe for **base + 3 RL experts → merged models**, with our
-KT-merging method **and** 12 baselines, ready for a 6-bench evaluation.
+KT-merging method (column-wise weighting on negative-Δlogp positions) **and**
+9 baselines, ready for a 6-bench evaluation.
 
 > Base: `Qwen/Qwen3-1.7B`
 > Experts: ifeval-RL, math-RL, coding-RL  (Nemotron-Cascade recipes)
@@ -9,38 +10,66 @@ KT-merging method **and** 12 baselines, ready for a 6-bench evaluation.
 
 ---
 
-## 0. Quick start (one-shot)
+## 0. Quick start
+
+### Full pipeline (ours + 9 baselines)
 
 ```bash
 cd <path-to>/KT_merge
 
-# 0. Install deps (Python 3.10 + CUDA-matched torch — see requirements.txt)
+# Install deps (Python 3.10 + CUDA-matched torch)
 pip install -r requirements.txt
 
-# 1. Place expert models under models/{ifeval,math,coding}/
-#    Each must contain *.safetensors + config.json + tokenizer.* (or be a symlink).
+# Place expert models under models/{ifeval,math,coding}/  (or symlinks)
 
-# 2. Pick GPU(s)
-export CUDA_VISIBLE_DEVICES=0           # single GPU is enough (default)
-                                        # CUDA_VISIBLE_DEVICES=0,1 only speeds up the optional 2-GPU prep_proxy path
+export CUDA_VISIBLE_DEVICES=0
 
-# 3. Full run: download → targets → proxy → W_expert → merge × (1 ours + 12 baselines)
+# Full run: download → targets → proxy → W_col → merge × (1 ours + 9 baselines)
 nohup bash run_pipeline.sh > outputs/pipeline.log 2>&1 &
 tail -f outputs/pipeline.log
 ```
 
-Step toggles (skip what's already done):
+### Run only **ours** (skip baselines)
 
 ```bash
-SKIP_DOWNLOAD=1 SKIP_PREP=1 bash run_pipeline.sh   # only re-compute W + re-merge
-SKIP_MERGE=1                bash run_pipeline.sh   # build proxy + W only
+SKIP_BASELINES=1 bash run_pipeline.sh
 ```
 
-Hyperparameter overrides:
+→ Builds proxy + W_col + the **ours** merge only.
+Output: `outputs/merges/W_col_neg_top<pct>/model.safetensors`.
+
+### Skip already-built artifacts
 
 ```bash
-KEY_TOP_FRAC=0.20 N_QUERIES=128 \
+# Re-compute W + re-merge ours only (proxy already built)
+SKIP_DOWNLOAD=1 SKIP_GEN_TARGETS=1 SKIP_PREP=1 SKIP_BASELINES=1 \
     bash run_pipeline.sh
+
+# Build proxy + W only, no merge
+SKIP_MERGE=1 bash run_pipeline.sh
+```
+
+### Toggles
+
+| env var | default | meaning |
+|---|---|---|
+| `KEY_TOP_FRAC` | **0.05** | bottom-K fraction by Δlogp (anti-key tokens) |
+| `ENERGY` | 0.90 | KT-Truncation energy threshold |
+| `BASE_MODEL` | `Qwen/Qwen3-1.7B` | HF id of base |
+| `N_QUERIES` | 128 | proxy queries per task |
+| `SEED` | 42 | sampling seed |
+| `DEVICE` | `cuda:0` | logical device for every step |
+| `SKIP_DOWNLOAD` | 0 | skip Step 0a |
+| `SKIP_GEN_TARGETS` | 0 | skip Step 0b |
+| `SKIP_PREP` | 0 | skip Step 1 |
+| `SKIP_COMPUTE_W` | 0 | skip Step 2 |
+| `SKIP_MERGE` | 0 | skip Step 3 |
+| `SKIP_BASELINES` | 0 | run **only ours**; skip 9 baselines in Step 3 |
+
+```bash
+# Different threshold
+KEY_TOP_FRAC=0.10 SKIP_BASELINES=1 bash run_pipeline.sh
+KEY_TOP_FRAC=0.20 SKIP_BASELINES=1 bash run_pipeline.sh
 ```
 
 ---
@@ -48,19 +77,19 @@ KEY_TOP_FRAC=0.20 N_QUERIES=128 \
 ## 1. Pipeline overview
 
 ```
-data/training/{ifeval,math,coding}_raw.jsonl ← Step 0a (download)
+data/training/{ifeval,math,coding}_raw.jsonl ← Step 0a (download HF prompts)
             │
             ▼
-data/training/{ifeval,math,coding}.jsonl     ← Step 0b (expert targets)
+data/training/{ifeval,math,coding}.jsonl     ← Step 0b (expert-generated targets)
             │
             ▼
 data/per_query/{ifeval,math,coding}.npz      ← Step 1 (teacher-force base+experts)
             │
             ▼
-outputs/W_expert_top<pct>_perexpert.npz      ← Step 2 (per-expert top-K% W)
+outputs/W_col_neg_top<pct>_perexpert.npz     ← Step 2 (col-side W on bottom-K%)
             │
             ▼
-outputs/merges/<method>/                     ← Step 3 (13 methods × 1 merge each)
+outputs/merges/<method>/                     ← Step 3 (ours + 9 baselines)
             │
             ▼
 external eval pipeline                       ← Step 4 (6 benches per merge)
@@ -68,14 +97,35 @@ external eval pipeline                       ← Step 4 (6 benches per merge)
 
 ---
 
-## 2. Step-by-step
+## 2. Method (ours)
 
-### Step 0 — Build training proxy data (two stages)
+For each Linear layer ℓ and expert i, compute a column-side weight from
+**bottom-K% Δlogp positions** (anti-key — where expert UNDER-performs base):
+
+```
+ω_col[i, ℓ, c] = ‖W_i,ℓ[:, c]‖₂  ·  mean_{h ∈ neg_i} | x_expert_i(ℓ, h, c) |
+```
+
+Then apply column-weighted SVD truncation per expert:
+
+```
+Y_i,ℓ   = ΔW_i,ℓ · diag(ω_col[i, ℓ])^{1/2}
+        SVD(Y) → keep top-K singular values reaching energy ≥ 0.9
+τ̂_i,ℓ  = Y^(K)_i,ℓ · diag(ω_col[i, ℓ])^{−1/2}
+```
+
+Cross-expert merge with polar alignment + per-expert renormalization
+(unchanged from the original KT-Polar). Variant tag: **`ktcol_polar_renorm`**.
+
+---
+
+## 3. Step-by-step
+
+### Step 0 — Build training proxy data
 
 **Stage 0a** ([`scripts/download_training_data.py`](scripts/download_training_data.py)):
 streams 3 HuggingFace datasets, samples 128 prompts each (seed 42), saves
-`{prompt, answer|null}` JSONL to `data/training/{task}_raw.jsonl`. Math has
-gold answers; ifeval/coding RL data ships prompts only.
+`{prompt, answer|null}` JSONL to `data/training/{task}_raw.jsonl`.
 
 | task | HF id |
 |---|---|
@@ -84,155 +134,128 @@ gold answers; ifeval/coding RL data ships prompts only.
 | coding | `nvidia/Nemotron-RL-coding-competitive_coding` |
 
 **Stage 0b** ([`scripts/generate_targets.py`](scripts/generate_targets.py)):
-fills in missing answers by running each task's own expert (greedy, max_new_tokens=512)
-on every prompt. Writes the completed `data/training/{task}.jsonl`.
-
-```bash
-python scripts/download_training_data.py --n 128 --seed 42
-python scripts/generate_targets.py \
-    --ifeval models/ifeval --math models/math --coding models/coding \
-    --tokenizer_src Qwen/Qwen3-1.7B --device cuda:0
-```
+fills missing answers via each task's expert (greedy, max_new_tokens=512).
 
 ### Step 1 — Build proxy per_query npz ([`scripts/prep_proxy_qwen3.py`](scripts/prep_proxy_qwen3.py))
 
-For each task and each sampled `(prompt, answer)`, run teacher-forcing on
-**base + 3 experts** and stack log-probs at the answer positions:
+For each task and `(prompt, answer)`, run teacher-forcing on **base + 3 experts**
+and save log-probs at the answer positions. Used downstream to identify
+anti-key tokens (bottom-K% by Δlog p).
 
-```
-base_lp        (T,)        log p_base(target_{h+1}|h)
-expert_lp      (4, T)      ['base', 'ifeval', 'math', 'coding'] log p
-tokens / full_tokens / seq_lens / prompt_lens / ...
-```
+### Step 2 — Compute W_col ([`scripts/compute_W_col.py`](scripts/compute_W_col.py))
 
-```bash
-python scripts/prep_proxy_qwen3.py \
-    --base Qwen/Qwen3-1.7B \
-    --ifeval models/ifeval --math models/math --coding models/coding \
-    --n_queries 128 --seed 42 --device cuda:0
-```
-
-> **Why training data, not eval data?** W's per-row weight encodes "where
-> the experts lift target log-prob" on the proxy set. If proxy = eval set,
-> we leak eval signal into the merge. Using each expert's RL training
-> distribution is leak-free.
-
-### Step 2 — Compute W_expert ([`scripts/compute_W_expert.py`](scripts/compute_W_expert.py))
-
-Δlog p comes pre-computed from Step 1's per_query npz, so the base model
-is **not** re-loaded here. For each expert i (forwarded on its own task
-only), pick the top-K% answer positions ranked by
-Δlog p = log p_expert_i − log p_base (exact top-k via `argpartition`;
-default 20%) as the key set, then accumulate
-
-```
-W_expert[i, ℓ, r] = mean_{h ∈ key_i}  |y_expert_i(ℓ, h, r)|
-```
-
-producing a per-layer 2D tensor of shape `(N=3, d_out)` indexed by
-`[ifeval, math, coding]`.
+For each expert i (forwarded on its own task), pick the **bottom-K%** answer
+positions ranked by Δlog p = log p_expert_i − log p_base (anti-key set).
+Hook the **input** to each Linear, accumulate `|z|`, average, then multiply
+by per-expert `‖W_i,ℓ[:, c]‖₂`.
 
 ```bash
-python scripts/compute_W_expert.py \
-    --key_top_frac 0.20 \
+python scripts/compute_W_col.py \
+    --key_top_frac 0.05 \
     --ifeval models/ifeval --math models/math --coding models/coding \
     --in_dir data/per_query \
-    --out outputs/W_expert_top20_perexpert.npz \
+    --out outputs/W_col_neg_top05_perexpert.npz \
     --device cuda:0
 ```
 
-### Step 3 — Merge (ours + baselines) ([`scripts/merge_baselines.sh`](scripts/merge_baselines.sh))
+Output: per-layer 2D tensor of shape `(N=3, d_in)` indexed by
+`[ifeval, math, coding]`.
 
-Runs 1 ours + 12 baselines = **13 merges total**, idempotent skip:
+### Step 3 — Merge ([`scripts/merge_baselines.sh`](scripts/merge_baselines.sh))
 
 | method | merge command |
 |---|---|
-| **ours: W_expert_top<pct>** | `merge_ablation.py --variants kt_polar_renorm --w_file <W>` |
-| task_arithmetic (1/N mean) | `merge.py --method task_arithmetic` |
-| ties / dare_ta / dare_ties | `merge.py --method ties|dare ...` |
-| star / cart / tsv | `merge.py --method <name> --device cuda:0` |
-| fisher | `merge.py --method fisher` |
-| iso_c / iso_cts | `merge.py --method iso_c|iso_cts --device cuda:0` |
-| ram / ram_plus | `merge.py --method ram|ram_plus --device cuda:0` |
+| **ours: W_col_neg_top<pct>** | `merge_ablation.py --variants ktcol_polar_renorm --w_col_file <W>` |
+| task_arithmetic | `merge.py --method task_arithmetic` |
+| ties / dare_ta | `merge.py --method ties|dare ...` |
+| star / tsv | `merge.py --method <name>` |
+| iso_c / iso_cts | `merge.py --method iso_c|iso_cts` |
+| ram / ram_plus | `merge.py --method ram|ram_plus` |
 
-Output: `outputs/merges/<method>/model.safetensors` per method. The default
-ours directory is `outputs/merges/W_expert_top20/` (symlink into the
-auto-detected ablation subdir).
+**Run only ours** (no baselines):
+```bash
+SKIP_BASELINES=1 bash scripts/merge_baselines.sh
+```
+
+Or via the pipeline orchestrator:
+```bash
+SKIP_BASELINES=1 bash run_pipeline.sh
+```
+
+Output: `outputs/merges/W_col_neg_top<pct>/model.safetensors` (symlink into
+the auto-detected ablation subdir).
 
 ### Step 4 — Evaluate (external)
 
-Evaluation is **not part of this pipeline**. After Step 3, plug each
-`outputs/merges/<method>/` into your own eval pipeline. The benches we used:
+Plug each `outputs/merges/<method>/` into your own eval pipeline. The benches:
 ifeval, aime24, aime25, aime26, livebench, livecodebench.
 
 ---
 
-## 3. GPU usage
+## 4. Variants supported
 
-```bash
-export CUDA_VISIBLE_DEVICES=0          # 1 GPU is sufficient (default)
-export CUDA_VISIBLE_DEVICES=0,1        # only Step 1 / merge baselines benefit
-```
+`scripts/merge_ablation.py` ships **13 variants** for ablation:
 
-`DEVICE` is the logical device passed to every step (default `cuda:0`).
-Step 2 only forwards each expert (base activations are not needed — Δlog p
-is read from the per_query npz), so a single GPU is enough.
+| tag | truncate | polar | renorm | kt_mode | notes |
+|---|---|---|---|---|---|
+| naive | none | — | — | — | TA sum baseline |
+| svd / svd_polar / svd_polar_renorm | std SVD | progressively | progressively | — | |
+| kt / kt_polar / kt_polar_renorm | KT | progressively | progressively | row | row-side weighting |
+| ktcol / ktcol_polar / **ktcol_polar_renorm** | KT | progressively | progressively | col | **OURS** (column-side) |
+| kt2s / kt2s_polar / kt2s_polar_renorm | KT | progressively | progressively | 2s | row × col simultaneous |
 
 ---
 
-## 4. Files
+## 5. GPU usage
+
+```bash
+export CUDA_VISIBLE_DEVICES=0          # 1 GPU is sufficient
+export CUDA_VISIBLE_DEVICES=0,1        # Step 1 / merge_baselines benefit from 2
+```
+
+`DEVICE` is the logical device (default `cuda:0`).
+Step 2 only forwards each expert (Δlog p is read from per_query npz), single GPU enough.
+
+---
+
+## 6. Files
 
 ```
 KT_merge/
 ├── README.md                          ← this file
-├── requirements.txt                   ← pip deps
+├── requirements.txt
 ├── run_pipeline.sh                    ← one-shot orchestrator
-├── models/                            ← place expert dirs (or symlinks) here
-│   ├── ifeval/                        (*.safetensors + config.json + tokenizer.*)
-│   ├── math/
-│   └── coding/
+├── models/                            ← place expert dirs (or symlinks)
+│   ├── ifeval/  math/  coding/
 ├── data/
-│   ├── training/{task}_raw.jsonl      ← Stage 0a output
-│   ├── training/{task}.jsonl          ← Stage 0b output (answers filled)
-│   └── per_query/{task}.npz           ← Step 1 output
+│   ├── training/{task}_raw.jsonl      ← Stage 0a
+│   ├── training/{task}.jsonl          ← Stage 0b
+│   └── per_query/{task}.npz           ← Step 1
 ├── outputs/
-│   ├── W_expert_top<pct>_perexpert.npz                   ← Step 2 output
-│   ├── merges/<method>/                                  ← Step 3 output (13 dirs)
-│   └── merge_logs/                                       ← per-method logs
+│   ├── W_col_neg_top<pct>_perexpert.npz                     ← Step 2
+│   ├── merges/<method>/                                     ← Step 3
+│   └── merge_logs/                                          ← per-method logs
 ├── scripts/
 │   ├── download_training_data.py    Stage 0a
 │   ├── generate_targets.py          Stage 0b
 │   ├── prep_proxy_qwen3.py          Step 1
-│   ├── compute_W_expert.py          Step 2
-│   ├── merge_ktpolar.py             Step 3 helpers
-│   ├── merge_ablation.py            Step 3 entry for ours
+│   ├── compute_W_col.py             Step 2 (NEW: col-side, neg-K%, with ‖W‖)
+│   ├── merge_ktpolar.py             Step 3 helpers (kttrunc_per_expert with W_col)
+│   ├── merge_ablation.py            Step 3 entry for ours (13 variants)
 │   ├── merge.py                     Step 3 baselines
-│   └── merge_baselines.sh           Step 3 driver
+│   └── merge_baselines.sh           Step 3 driver (SKIP_BASELINES=1 to skip baselines)
 └── deps/
-    └── kt_merge_helpers.py          5 shared helpers
+    └── kt_merge_helpers.py
 ```
 
 ---
 
-## 5. Hyperparameters
-
-| flag | default | meaning |
-|---|---|---|
-| `BASE_MODEL` | `Qwen/Qwen3-1.7B` | HF id, auto-downloaded |
-| `N_QUERIES` | 128 | proxy queries per task |
-| `SEED` | 42 | sampling seed |
-| `KEY_TOP_FRAC` | **0.20** | per-expert top-K fraction by Δlog p (exact top-k) |
-| `ENERGY` | 0.90 | KT-Truncation energy threshold |
-| `DEVICE` | `cuda:0` | logical device for every step |
-
----
-
-## 6. Notes
+## 7. Notes
 
 - **Idempotent**: every step checks for existing artifacts and skips.
   Resume after a crash by simply re-running `bash run_pipeline.sh`.
 - **Disk**: each merged 1.7B model ≈ 3.4 GB float32 / 1.7 GB bf16.
-  13 merges ≈ 25–45 GB. Plus per_query npz (~tens of MB).
+  10 merges (1 ours + 9 baselines) ≈ 20–35 GB. Plus per_query npz (~tens of MB).
 - **Save dir validation in `merge.py`**: by default disabled. To restrict
   the output root, `export KT_SAVE_ROOT=/abs/path/you/want` before running.
 - **Evaluation**: not part of this pipeline. After Step 3, plug

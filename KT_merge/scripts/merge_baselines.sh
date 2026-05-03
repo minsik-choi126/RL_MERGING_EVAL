@@ -61,21 +61,21 @@ run() {  # run <tag> <python_command...>
 }
 
 # ── Ours ────────────────────────────────────────────────────────────────────
-# Use merge_ablation.py for ours. Variant kt_polar_renorm with W_expert
-# (kt-truncate + polar align + per-expert renorm) is the headline method.
-W_FILE="${W_FILE:-${ROOT}/outputs/W_expert_top${KEY_TOP_PCT}_perexpert.npz}"
-if [ ! -f "${W_FILE}" ]; then
-    echo "[ERR] ${W_FILE} missing — run compute_W_expert.py first" >&2
+# Variant ktcol_polar_renorm with column-side W (negative-Δlogp positions,
+# multiplied by ‖W[:,c]‖₂) — headline method.
+W_COL_FILE="${W_COL_FILE:-${ROOT}/outputs/W_col_neg_top${KEY_TOP_PCT}_perexpert.npz}"
+if [ ! -f "${W_COL_FILE}" ]; then
+    echo "[ERR] ${W_COL_FILE} missing — run compute_W_col.py first" >&2
     exit 1
 fi
-OURS_TAG="${OURS_TAG:-W_expert_top${KEY_TOP_PCT}}"
+OURS_TAG="${OURS_TAG:-W_col_neg_top${KEY_TOP_PCT}}"
 ABL_ROOT="${OUT_DIR}/_ablation/${OURS_TAG}"
-ABL_OUT="${ABL_ROOT}/kt_polar_renorm"
+ABL_OUT="${ABL_ROOT}/ktcol_polar_renorm"
 OURS_TARGET="${OUT_DIR}/${OURS_TAG}"
 
 # Detect per-expert (2D) vs union (1D) W just for logging
-W_NDIM=$(python3 -c "import numpy as np; a=np.load('${W_FILE}'); k=list(a.keys())[0]; print(a[k].ndim)" 2>/dev/null || echo 1)
-echo "[info] W file is ${W_NDIM}D  (1=union, 2=per-expert)"
+W_NDIM=$(python3 -c "import numpy as np; a=np.load('${W_COL_FILE}'); k=list(a.keys())[0]; print(a[k].ndim)" 2>/dev/null || echo 1)
+echo "[info] W_col file is ${W_NDIM}D  (1=union, 2=per-expert)"
 
 OURS_READY=0
 if ls "${OURS_TARGET}"/*.safetensors >/dev/null 2>&1; then
@@ -88,8 +88,8 @@ elif ! ls "${ABL_OUT}"/*.safetensors >/dev/null 2>&1; then
     echo "  log: ${log}"
     set +e
     python "${HERE}/merge_ablation.py" \
-        --variants kt_polar_renorm \
-        --w_file "${W_FILE}" \
+        --variants ktcol_polar_renorm \
+        --w_col_file "${W_COL_FILE}" \
         --energy "${ENERGY}" \
         --device "${DEVICE}" \
         --out_root "${ABL_ROOT}" \
@@ -127,35 +127,38 @@ else
     fi
 fi
 
-# ── Baselines ───────────────────────────────────────────────────────────────
-# Each baseline method runs once with all 3 experts → 3-way merge.
-BASELINES=(
-    "task_arithmetic     --method task_arithmetic"
-    "ties                --method ties --device ${TIES_DEVICE}"
-    "dare_ta             --method dare --dare_merge_method task_arithmetic --device ${DEVICE}"
-    "star                --method star --device ${DEVICE}"
-    "tsv                 --method tsv --device ${DEVICE}"
-    "iso_c               --method iso_c --device ${DEVICE}"
-    "iso_cts             --method iso_cts --device ${DEVICE}"
-    "ram                 --method ram --device ${DEVICE}"
-    "ram_plus            --method ram_plus --device ${DEVICE}"
-)
-
+# ── Baselines (skip with SKIP_BASELINES=1 to run only ours) ────────────────
 FAILED=()
-for spec in "${BASELINES[@]}"; do
-    tag=$(echo "${spec}" | awk '{print $1}')
-    extra=$(echo "${spec}" | cut -d' ' -f2-)
-    set +e
-    run "${tag}" \
-        python "${HERE}/merge.py" \
-            ${extra} \
-            --base_model "${BASE_MODEL}" \
-            --expert_models "${IFEVAL}" "${MATH}" "${CODING}" \
-            --save_dir "${OUT_DIR}/${tag}"
-    rc=$?
-    set -e
-    [ "${rc}" -ne 0 ] && FAILED+=("${tag}")
-done
+if [ "${SKIP_BASELINES:-0}" = "1" ]; then
+    echo ""
+    echo "── Baselines: SKIPPED (SKIP_BASELINES=1)"
+else
+    BASELINES=(
+        "task_arithmetic     --method task_arithmetic"
+        "ties                --method ties --device ${TIES_DEVICE}"
+        "dare_ta             --method dare --dare_merge_method task_arithmetic --device ${DEVICE}"
+        "star                --method star --device ${DEVICE}"
+        "tsv                 --method tsv --device ${DEVICE}"
+        "iso_c               --method iso_c --device ${DEVICE}"
+        "iso_cts             --method iso_cts --device ${DEVICE}"
+        "ram                 --method ram --device ${DEVICE}"
+        "ram_plus            --method ram_plus --device ${DEVICE}"
+    )
+    for spec in "${BASELINES[@]}"; do
+        tag=$(echo "${spec}" | awk '{print $1}')
+        extra=$(echo "${spec}" | cut -d' ' -f2-)
+        set +e
+        run "${tag}" \
+            python "${HERE}/merge.py" \
+                ${extra} \
+                --base_model "${BASE_MODEL}" \
+                --expert_models "${IFEVAL}" "${MATH}" "${CODING}" \
+                --save_dir "${OUT_DIR}/${tag}"
+        rc=$?
+        set -e
+        [ "${rc}" -ne 0 ] && FAILED+=("${tag}")
+    done
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
