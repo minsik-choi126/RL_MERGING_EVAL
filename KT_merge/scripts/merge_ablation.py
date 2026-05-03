@@ -393,7 +393,7 @@ def run_variant(
             print(f"  {name}: k median={int(np.median(ks))}  α avg={np.mean(alphas):.3f}")
         else:
             print(f"  {name}: (no rank-k > 0 layers — naive variant?)")
-    if needs_W:
+    if needs_Wrow or needs_Wcol:
         print(f"  [kt] W-fallback layers: {n_fallback_layers}/{len(keys_2d)} "
               f"(layers without matching W → unweighted SVD)")
 
