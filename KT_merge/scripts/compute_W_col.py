@@ -81,14 +81,11 @@ def _hook_factory(state: dict, store: dict):
         def hook(_m, inputs, _out):
             x = inputs[0]
             if x is None: return
+            a, b = state["a"], state["b"]
             if x.dim() == 3:
-                if nm == "lm_head":
-                    store[nm] = x[0].detach().clone()
-                else:
-                    a, b = state["a"], state["b"]
-                    store[nm] = x[0, a:b].detach().clone()
+                # always slice to answer span [a:b] so per-token mask aligns
+                store[nm] = x[0, a:b].detach().clone()
             elif x.dim() == 2:
-                a, b = state["a"], state["b"]
                 store[nm] = x[a:b].detach().clone()
         return hook
     return mk
