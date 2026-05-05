@@ -174,7 +174,7 @@ Output: per-layer 2D tensor of shape `(N=3, d_in)` indexed by
 | task_arithmetic | `merge.py --method task_arithmetic` |
 | ties / dare_ta | `merge.py --method ties|dare ...` |
 | star / tsv | `merge.py --method <name>` |
-| iso_c / iso_cts | `merge.py --method iso_c|iso_cts` |
+| iso_cts | `merge.py --method iso_cts` |
 | ram / ram_plus | `merge.py --method ram|ram_plus` |
 
 **Run only ours** (no baselines):

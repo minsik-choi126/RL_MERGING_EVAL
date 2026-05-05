@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Merge ours (W_expert_top<pct>) + 9 baseline methods on Qwen3-1.7B + 3 RL experts.
+# Merge ours (W_expert_top<pct>) + 8 baseline methods on Qwen3-1.7B + 3 RL experts.
 #
 # All merges land under: $OUT_DIR/<method>/  (default: KT_merge/outputs/merges/)
 #
-# Methods (10 total):
+# Methods (9 total):
 #   ours: W_expert_top<pct>
 #   baselines: task_arithmetic, ties, dare_ta, star, tsv,
-#              iso_c, iso_cts, ram, ram_plus
+#              iso_cts, ram, ram_plus
 #
 # Prereqs:
 #   - models/{ifeval,math,lucy}/ symlinks present
@@ -137,7 +137,6 @@ else
         "dare_ta             --method dare --dare_merge_method task_arithmetic --device ${DEVICE}"
         "star                --method star --device ${DEVICE}"
         "tsv                 --method tsv --device ${DEVICE}"
-        "iso_c               --method iso_c --device ${DEVICE}"
         "iso_cts             --method iso_cts --device ${DEVICE}"
         "ram                 --method ram --device ${DEVICE}"
         "ram_plus            --method ram_plus --device ${DEVICE}"
