@@ -9,8 +9,8 @@
 #              iso_c, iso_cts, ram, ram_plus
 #
 # Prereqs:
-#   - models/{ifeval,math,coding}/ symlinks present
-#   - data/per_query/{ifeval,math,coding}.npz present (run prep_proxy_qwen3.py)
+#   - models/{ifeval,math,lucy}/ symlinks present
+#   - data/per_query/{ifeval,math,lucy}.npz present (run prep_proxy_qwen3.py)
 #   - outputs/W_expert_top<pct>_perexpert.npz present (compute_W_expert.py)
 set -euo pipefail
 
@@ -25,11 +25,11 @@ LOG_DIR="${LOG_DIR:-${ROOT}/outputs/merge_logs}"
 
 IFEVAL="${ROOT}/models/ifeval"
 MATH="${ROOT}/models/math"
-CODING="${ROOT}/models/coding"
+LUCY="${ROOT}/models/lucy"
 
 mkdir -p "${OUT_DIR}" "${LOG_DIR}"
 
-for d in "${IFEVAL}" "${MATH}" "${CODING}"; do
+for d in "${IFEVAL}" "${MATH}" "${LUCY}"; do
     if ! ls "$d"/*.safetensors >/dev/null 2>&1; then
         echo "[ERR] missing safetensors in: $d" >&2; exit 1
     fi
@@ -92,7 +92,7 @@ elif ! ls "${ABL_OUT}"/*.safetensors >/dev/null 2>&1; then
         --device "${DEVICE}" \
         --out_root "${ABL_ROOT}" \
         --base_model "${BASE_MODEL}" \
-        --expert_paths "ifeval=${IFEVAL}" "math=${MATH}" "coding=${CODING}" \
+        --expert_paths "ifeval=${IFEVAL}" "math=${MATH}" "lucy=${LUCY}" \
         2>&1 | tee "${log}"
     rc=${PIPESTATUS[0]}
     set -e
@@ -150,7 +150,7 @@ else
             python "${HERE}/merge.py" \
                 ${extra} \
                 --base_model "${BASE_MODEL}" \
-                --expert_models "${IFEVAL}" "${MATH}" "${CODING}" \
+                --expert_models "${IFEVAL}" "${MATH}" "${LUCY}" \
                 --save_dir "${OUT_DIR}/${tag}"
         rc=$?
         set -e

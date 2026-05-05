@@ -5,7 +5,7 @@ KT-merging method (column-wise weighting via |Δlogp|^α soft + Wnorm) **and**
 9 baselines, ready for a 6-bench evaluation.
 
 > Base: `Qwen/Qwen3-1.7B`
-> Experts: ifeval-RL, math-RL, coding-RL  (Nemotron-Cascade recipes)
+> Experts: ifeval-RL, math-RL, lucy-RL  (Nemotron-Cascade recipes)
 > Eval: ifeval / aime24 / aime25 / aime26 / livebench / livecodebench
 
 ---
@@ -20,7 +20,7 @@ cd <path-to>/KT_merge
 # Install deps (Python 3.10 + CUDA-matched torch)
 pip install -r requirements.txt
 
-# Place expert models under models/{ifeval,math,coding}/  (or symlinks)
+# Place expert models under models/{ifeval,math,lucy}/  (or symlinks)
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -77,13 +77,13 @@ ALPHA=2.0 SKIP_BASELINES=1 bash run_pipeline.sh
 ## 1. Pipeline overview
 
 ```
-data/training/{ifeval,math,coding}_raw.jsonl ← Step 0a (download HF prompts)
+data/training/{ifeval,math,lucy}_raw.jsonl ← Step 0a (download HF prompts)
             │
             ▼
-data/training/{ifeval,math,coding}.jsonl     ← Step 0b (expert-generated targets)
+data/training/{ifeval,math,lucy}.jsonl     ← Step 0b (expert-generated targets)
             │
             ▼
-data/per_query/{ifeval,math,coding}.npz      ← Step 1 (teacher-force base+experts)
+data/per_query/{ifeval,math,lucy}.npz      ← Step 1 (teacher-force base+experts)
             │
             ▼
 outputs/W_col_abs_perexpert.npz              ← Step 2 (col-side W, abs+soft, ×‖W[:,c]‖₂)
@@ -137,7 +137,7 @@ streams 3 HuggingFace datasets, samples 128 prompts each (seed 42), saves
 |---|---|
 | ifeval | `nvidia/Nemotron-Cascade-RL-Instruction-Following` |
 | math | `nvidia/Nemotron-Cascade-RL-Math` |
-| coding | `nvidia/Nemotron-RL-coding-competitive_coding` |
+| lucy | `nvidia/Nemotron-RL-lucy-competitive_coding` |
 
 **Stage 0b** ([`scripts/generate_targets.py`](scripts/generate_targets.py)):
 fills missing answers via each task's expert (greedy, max_new_tokens=512).
@@ -157,14 +157,14 @@ by Σw and multiply by per-expert `‖W_i,ℓ[:, c]‖₂`.
 ```bash
 python scripts/compute_W_col.py \
     --alpha 1.0 \
-    --ifeval models/ifeval --math models/math --coding models/coding \
+    --ifeval models/ifeval --math models/math --lucy models/lucy \
     --in_dir data/per_query \
     --out outputs/W_col_abs_perexpert.npz \
     --device cuda:0
 ```
 
 Output: per-layer 2D tensor of shape `(N=3, d_in)` indexed by
-`[ifeval, math, coding]`.
+`[ifeval, math, lucy]`.
 
 ### Step 3 — Merge ([`scripts/merge_baselines.sh`](scripts/merge_baselines.sh))
 
@@ -231,7 +231,7 @@ KT_merge/
 ├── requirements.txt
 ├── run_pipeline.sh                    ← one-shot orchestrator
 ├── models/                            ← place expert dirs (or symlinks)
-│   ├── ifeval/  math/  coding/
+│   ├── ifeval/  math/  lucy/
 ├── data/
 │   ├── training/{task}_raw.jsonl      ← Stage 0a
 │   ├── training/{task}.jsonl          ← Stage 0b

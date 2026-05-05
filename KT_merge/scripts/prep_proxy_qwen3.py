@@ -5,7 +5,7 @@ Calibration set = the **training distributions** of the three RL experts
 
     ifeval  ←  nvidia/Nemotron-Cascade-RL-Instruction-Following
     math    ←  nvidia/Nemotron-Cascade-RL-Math
-    coding  ←  nvidia/Nemotron-RL-coding-competitive_coding
+    lucy  ←  nvidia/Nemotron-RL-lucy-competitive_coding
 
 For each task and query in the sampled subset, we run teacher-forcing through
 base + each expert and save:
@@ -17,18 +17,18 @@ base + each expert and save:
     seq_lens       (n_q,)            int32    answer length per query
     full_seq_lens  (n_q,)            int32    prompt+answer length per query
     prompt_lens    (n_q,)            int32    prompt length per query
-    expert_names   (n_experts+1,)    str      ['base', 'ifeval', 'math', 'coding']
+    expert_names   (n_experts+1,)    str      ['base', 'ifeval', 'math', 'lucy']
     query_sources  (n_q,)            str      data source label
     query_ids      (n_q,)            int32    sampling index
 
-Output: <out_dir>/{ifeval,math,coding}.npz   (override via --out_dir)
+Output: <out_dir>/{ifeval,math,lucy}.npz   (override via --out_dir)
 
 Usage:
     python prep_proxy_qwen3.py \\
         --base    Qwen/Qwen3-1.7B \\
         --ifeval  /path/to/ifeval_expert  \\
         --math    /path/to/math_expert    \\
-        --coding  /path/to/coding_expert  \\
+        --lucy  /path/to/coding_expert  \\
         --n_queries 128 --seed 0 \\
         --out_dir ../data/per_query
 """
@@ -47,11 +47,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 HF_DATASETS = {
     "ifeval": "nvidia/Nemotron-Cascade-RL-Instruction-Following",
     "math":   "nvidia/Nemotron-Cascade-RL-Math",
-    "coding": "nvidia/Nemotron-RL-coding-competitive_coding",
+    "lucy": "nvidia/Nemotron-RL-lucy-competitive_coding",
 }
 
 # Maximum answer length we consume per query — keeps memory bounded.
-# Math/coding can have very long reasoning; we truncate at this many tokens.
+# Math/lucy can have very long reasoning; we truncate at this many tokens.
 MAX_ANS_TOKENS = 4096
 MAX_PROMPT_TOKENS = 8192
 
@@ -314,7 +314,7 @@ def main():
                     help="Base model path or HuggingFace id")
     ap.add_argument("--ifeval", required=True, help="ifeval RL expert path")
     ap.add_argument("--math",   required=True, help="math RL expert path")
-    ap.add_argument("--coding", required=True, help="coding RL expert path")
+    ap.add_argument("--lucy", required=True, help="lucy RL expert path")
     ap.add_argument("--n_queries", type=int, default=128)
     ap.add_argument("--seed", type=int, default=42,
                     help="default 42; matches the download_training_data.py seed")
@@ -325,12 +325,12 @@ def main():
     ap.add_argument("--training_dir",
                     default=str(Path(__file__).resolve().parent.parent / "data" / "training"),
                     help="dir with local {task}.jsonl files (run download_training_data.py first)")
-    ap.add_argument("--tasks", nargs="+", default=["ifeval", "math", "coding"])
+    ap.add_argument("--tasks", nargs="+", default=["ifeval", "math", "lucy"])
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
     training_dir = Path(args.training_dir)
-    expert_paths = {"ifeval": args.ifeval, "math": args.math, "coding": args.coding}
+    expert_paths = {"ifeval": args.ifeval, "math": args.math, "lucy": args.lucy}
 
     for task in args.tasks:
         if task not in HF_DATASETS:

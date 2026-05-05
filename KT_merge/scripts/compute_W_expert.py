@@ -11,7 +11,7 @@ prompts, ranked by Δlog p = log p_expert_i(target_h) − log p_base(target_h).
 is NOT re-loaded here. Top-k selection is exact via argpartition (no
 threshold ties). Only the expert is forwarded; we accumulate |y_expert| at
 key positions to build a per-layer (N=3, d_out) tensor indexed by
-[ifeval, math, coding].
+[ifeval, math, lucy].
 
 Output:  <out>  (default: outputs/W_expert_top<pct>_perexpert.npz)
 """
@@ -32,7 +32,7 @@ ROOT = HERE.parent
 DEFAULT_PER_QUERY = ROOT / "data" / "per_query"
 
 # (expert_name, task_name) — task name == .npz filename in per_query
-EXPERT_ORDER = ["ifeval", "math", "coding"]
+EXPERT_ORDER = ["ifeval", "math", "lucy"]
 
 
 def load_task(per_query_dir: Path, task: str, expert: str, key_top_frac: float):
@@ -90,19 +90,19 @@ def main() -> None:
     ap.add_argument("--key_top_frac", type=float, default=0.20,
                     help="per-expert top fraction by Δlog p counted as key (default 0.20)")
     ap.add_argument("--in_dir", default=str(DEFAULT_PER_QUERY),
-                    help="directory containing {ifeval,math,coding}.npz")
+                    help="directory containing {ifeval,math,lucy}.npz")
     ap.add_argument("--out", default=None,
                     help="output .npz path; default = outputs/W_expert_top<pct>_perexpert.npz")
     ap.add_argument("--ifeval", required=True, help="ifeval RL expert path")
     ap.add_argument("--math",   required=True, help="math RL expert path")
-    ap.add_argument("--coding", required=True, help="coding RL expert path")
+    ap.add_argument("--lucy", required=True, help="lucy RL expert path")
     ap.add_argument("--device", default="cuda:0",
                     help="GPU for the expert forward (default cuda:0)")
     ap.add_argument("--max_prompts", type=int, default=None,
                     help="limit prompts per expert (for quick smoke tests)")
     args = ap.parse_args()
 
-    expert_paths = {"ifeval": args.ifeval, "math": args.math, "coding": args.coding}
+    expert_paths = {"ifeval": args.ifeval, "math": args.math, "lucy": args.lucy}
     in_dir = Path(args.in_dir)
     pct = int(round(args.key_top_frac * 100))
     if args.out is None:

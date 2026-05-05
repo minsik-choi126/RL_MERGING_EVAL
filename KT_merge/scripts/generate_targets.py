@@ -14,7 +14,7 @@ For math, gold answers are usually present and used as-is.
 
 Usage:
     python generate_targets.py \\
-        --ifeval models/ifeval --math models/math --coding models/coding \\
+        --ifeval models/ifeval --math models/math --lucy models/lucy \\
         --device cuda:0 --max_new_tokens 512
 """
 from __future__ import annotations
@@ -101,18 +101,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ifeval", required=True)
     ap.add_argument("--math",   required=True)
-    ap.add_argument("--coding", required=True)
+    ap.add_argument("--lucy", required=True)
     ap.add_argument("--data_dir",
                     default=str(Path(__file__).resolve().parent.parent / "data" / "training"))
     ap.add_argument("--tokenizer_src", default="Qwen/Qwen3-1.7B",
                     help="tokenizer source (base model id, shared by all experts)")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--max_new_tokens", type=int, default=512)
-    ap.add_argument("--tasks", nargs="+", default=["ifeval", "math", "coding"])
+    ap.add_argument("--tasks", nargs="+", default=["ifeval", "math", "lucy"])
     args = ap.parse_args()
 
     expert_paths: Dict[str, str] = {
-        "ifeval": args.ifeval, "math": args.math, "coding": args.coding,
+        "ifeval": args.ifeval, "math": args.math, "lucy": args.lucy,
     }
 
     print(f"[init] loading tokenizer: {args.tokenizer_src}")

@@ -3,11 +3,11 @@
 Each Qwen3 RL dataset has a different schema:
     ifeval — prompt list, NO gold answer (RL uses rule-based verifier)
     math   — problem + answer (string)
-    coding — responses_create_params.input + unit_tests, NO gold code answer
+    lucy — responses_create_params.input + unit_tests, NO gold code answer
     lucy   — chat-format prompt list + completion (musique web-search agent
              RL data; gold completion present)
 
-For ifeval/coding we save only the prompt; targets are generated later by the
+For ifeval/lucy we save only the prompt; targets are generated later by the
 task-specific expert in `generate_targets.py`. For math/lucy we save
 (prompt, answer) directly using the gold answer/completion.
 
@@ -27,7 +27,6 @@ from datasets import load_dataset
 HF_DATASETS = {
     "ifeval": "nvidia/Nemotron-Cascade-RL-Instruction-Following",
     "math":   "nvidia/Nemotron-Cascade-RL-Math",
-    "coding": "nvidia/Nemotron-RL-coding-competitive_coding",
     "lucy":   "Menlo/sft-lucy-musique-data-corrected-with-completion",
 }
 
@@ -67,13 +66,6 @@ def extract(task: str, row: dict) -> dict | None:
         ans = row.get("answer") or row.get("solution")
         if prompt and ans:
             return {"prompt": str(prompt), "answer": str(ans)}
-        return None
-
-    if task == "coding":
-        rcp = row.get("responses_create_params")
-        if isinstance(rcp, dict):
-            prompt = _messages_to_prompt(rcp.get("input"))
-            return {"prompt": prompt, "answer": None} if prompt else None
         return None
 
     if task == "lucy":

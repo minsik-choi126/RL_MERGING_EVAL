@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# KT-Merge end-to-end pipeline for Qwen3-1.7B + 3 RL experts (ifeval/math/coding).
+# KT-Merge end-to-end pipeline for Qwen3-1.7B + 3 RL experts (ifeval/math/lucy).
 #
-#   Step 0: download HF prompts → generate targets → data/training/{ifeval,math,coding}.jsonl
+#   Step 0: download HF prompts → generate targets → data/training/{ifeval,math,lucy}.jsonl
 #   Step 1: prep proxy per_query npz from local training data
 #   Step 2: compute W_expert (per-expert top-K% by Δlog p; default 20%)
 #   Step 3: merge ours (W_expert) + 12 baselines
@@ -77,7 +77,7 @@ else
 fi
 
 # ── Step 0b: generate missing targets via task-specific experts ─────────────
-# ifeval/coding RL data has no gold answer; we generate one with each task's
+# ifeval/lucy RL data has no gold answer; we generate one with each task's
 # own expert (greedy decoding). Math uses gold answer when present.
 if [ "${SKIP_GEN_TARGETS:-0}" != "1" ]; then
     echo ""
@@ -85,7 +85,7 @@ if [ "${SKIP_GEN_TARGETS:-0}" != "1" ]; then
     python "${SCRIPTS}/generate_targets.py" \
         --ifeval "${HERE}/models/ifeval" \
         --math   "${HERE}/models/math" \
-        --coding "${HERE}/models/coding" \
+        --lucy "${HERE}/models/lucy" \
         --tokenizer_src "${BASE_MODEL}" \
         --device "${DEVICE}" \
         --data_dir "${TRAINING_DIR}" \
@@ -103,7 +103,7 @@ if [ "${SKIP_PREP:-0}" != "1" ]; then
         --base "${BASE_MODEL}" \
         --ifeval "${HERE}/models/ifeval" \
         --math   "${HERE}/models/math" \
-        --coding "${HERE}/models/coding" \
+        --lucy "${HERE}/models/lucy" \
         --n_queries "${N_QUERIES}" \
         --seed "${SEED}" \
         --device "${DEVICE}" \
@@ -122,7 +122,7 @@ if [ "${SKIP_COMPUTE_W:-0}" != "1" ]; then
         --alpha "${ALPHA}" \
         --ifeval "${HERE}/models/ifeval" \
         --math   "${HERE}/models/math" \
-        --coding "${HERE}/models/coding" \
+        --lucy "${HERE}/models/lucy" \
         --device "${DEVICE}" \
         --in_dir "${PER_QUERY_DIR}" \
         --out "${W_COL_FILE}"

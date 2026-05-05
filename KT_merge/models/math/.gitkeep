@@ -1,2 +1,0 @@
-# Place math RL expert here:
-#   *.safetensors + config.json + tokenizer.* (or symlink to a model dir)

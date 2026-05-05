@@ -16,3 +16,13 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# Per-expert/abs W_col npz (re-buildable)
+outputs/W_col_*.npz
+outputs/W_expert_*.npz
+
+# Local model symlinks (user-specific)
+models/ifeval
+models/math
+models/lucy
+models/coding

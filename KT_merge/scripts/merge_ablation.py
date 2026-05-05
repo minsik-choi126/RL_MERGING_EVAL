@@ -69,7 +69,7 @@ BASE = "Qwen/Qwen3-1.7B"
 RL_EXPERTS = {
     "ifeval": str(ROOT / "models" / "ifeval"),
     "math":   str(ROOT / "models" / "math"),
-    "coding": str(ROOT / "models" / "coding"),
+    "lucy": str(ROOT / "models" / "lucy"),
 }
 
 # W_activation is collected from nn.Linear outputs. Embedding matrices are 2D
@@ -331,7 +331,14 @@ def run_variant(
     t0 = time.time()
     for li, key in enumerate(keys_2d):
         W_base = base_sd[key].float().to(device)
-        taus = [expert_sds[n][key].float().to(device) - W_base for n in expert_names]
+        # Some experts (e.g. Lucy) save tie_word_embeddings models without an
+        # explicit lm_head.weight; fall back to model.embed_tokens.weight.
+        def _get_w(sd, k):
+            if k in sd: return sd[k]
+            if k == "lm_head.weight" and "model.embed_tokens.weight" in sd:
+                return sd["model.embed_tokens.weight"]
+            raise KeyError(k)
+        taus = [_get_w(expert_sds[n], key).float().to(device) - W_base for n in expert_names]
 
         d_out_l, d_in_l = W_base.shape
 
@@ -435,7 +442,7 @@ def main():
                      help="override BASE model path/HF id (default: hard-coded)")
     ap.add_argument("--expert_paths", nargs="+", default=None,
                      help=("override expert paths as <name>=<path>, e.g. "
-                           "ifeval=models/ifeval math=models/math coding=models/coding"))
+                           "ifeval=models/ifeval math=models/math lucy=models/lucy"))
     args = ap.parse_args()
 
     # Apply CLI overrides for BASE / RL_EXPERTS

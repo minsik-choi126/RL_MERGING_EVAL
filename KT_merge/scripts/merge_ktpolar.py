@@ -60,7 +60,7 @@ BASE = "Qwen/Qwen3-1.7B"
 RL_EXPERTS = {
     "ifeval": str(ROOT / "models" / "ifeval"),
     "math":   str(ROOT / "models" / "math"),
-    "coding": str(ROOT / "models" / "coding"),
+    "lucy": str(ROOT / "models" / "lucy"),
 }
 
 LM_HEAD_KEY_CANDIDATES = ["lm_head.weight"]  # Qwen3 standard
@@ -578,7 +578,7 @@ def main():
                     help="override base model path / HF id (default: hard-coded Qwen2.5-7B)")
     ap.add_argument("--experts", nargs="+", default=None,
                     help=("override RL experts as <name>=<path> pairs, e.g. "
-                          "ifeval=models/ifeval math=models/math coding=models/coding"))
+                          "ifeval=models/ifeval math=models/math lucy=models/lucy"))
     ap.add_argument("--out_dir", default=None,
                     help="override output dir for merge (default: outputs/merges)")
     args = ap.parse_args()

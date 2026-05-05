@@ -32,7 +32,7 @@ from kt_merge_helpers import _resolve_model_path  # type: ignore
 ROOT = HERE.parent
 DEFAULT_PER_QUERY = ROOT / "data" / "per_query"
 
-EXPERT_ORDER = ["ifeval", "math", "coding"]
+EXPERT_ORDER = ["ifeval", "math", "lucy"]
 
 
 def load_task(per_query_dir: Path, task: str, expert: str, alpha: float):
@@ -92,12 +92,12 @@ def main() -> None:
                     help="output .npz path; default = outputs/W_col_abs_perexpert.npz")
     ap.add_argument("--ifeval", required=True, help="ifeval RL expert path")
     ap.add_argument("--math",   required=True, help="math RL expert path")
-    ap.add_argument("--coding", required=True, help="coding RL expert path")
+    ap.add_argument("--lucy", required=True, help="lucy RL expert path")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--max_prompts", type=int, default=None)
     args = ap.parse_args()
 
-    expert_paths = {"ifeval": args.ifeval, "math": args.math, "coding": args.coding}
+    expert_paths = {"ifeval": args.ifeval, "math": args.math, "lucy": args.lucy}
     in_dir = Path(args.in_dir)
     if args.out is None:
         out_path = ROOT / "outputs" / "W_col_abs_perexpert.npz"
