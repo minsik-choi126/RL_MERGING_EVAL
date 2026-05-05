@@ -194,16 +194,21 @@ def load_state_dict(model_path: str) -> dict:
         sd = {}
         for sf in sf_files:
             sd.update(load_file(str(sf), device="cpu"))
-        return sd
-
-    print(f"  Loading via HF AutoModel: {model_path}")
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=torch.float32, device_map="cpu",
-        low_cpu_mem_usage=True, trust_remote_code=True,
-    )
-    sd = model.state_dict()
-    del model
-    gc.collect()
+    else:
+        print(f"  Loading via HF AutoModel: {model_path}")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.float32, device_map="cpu",
+            low_cpu_mem_usage=True, trust_remote_code=True,
+        )
+        sd = model.state_dict()
+        del model
+        gc.collect()
+    # Auto-add lm_head.weight if missing (tie_word_embeddings models like Lucy
+    # save only embed_tokens.weight). Keeps key sets aligned across experts so
+    # methods that flatten params (TIES, RAM, ...) don't OOM with a size
+    # mismatch when one expert is short by one tensor.
+    if "lm_head.weight" not in sd and "model.embed_tokens.weight" in sd:
+        sd["lm_head.weight"] = sd["model.embed_tokens.weight"].clone()
     return sd
 
 
