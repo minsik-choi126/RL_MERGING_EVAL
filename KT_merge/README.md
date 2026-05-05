@@ -1,7 +1,7 @@
 # KT-Merge — Qwen3-1.7B 3-Way RL Expert Merging Pipeline
 
 End-to-end recipe for **base + 3 RL experts → merged models**, with our
-KT-merging method (column-wise weighting on negative-Δlogp positions) **and**
+KT-merging method (column-wise weighting via |Δlogp|^α soft + Wnorm) **and**
 9 baselines, ready for a 6-bench evaluation.
 
 > Base: `Qwen/Qwen3-1.7B`
@@ -36,7 +36,7 @@ SKIP_BASELINES=1 bash run_pipeline.sh
 ```
 
 → Builds proxy + W_col + the **ours** merge only.
-Output: `outputs/merges/W_col_neg_top<pct>/model.safetensors`.
+Output: `outputs/merges/W_col_abs/model.safetensors`.
 
 ### Skip already-built artifacts
 
@@ -53,7 +53,7 @@ SKIP_MERGE=1 bash run_pipeline.sh
 
 | env var | default | meaning |
 |---|---|---|
-| `KEY_TOP_FRAC` | **0.05** | bottom-K fraction by Δlogp (anti-key tokens) |
+| `ALPHA` | **1.0** | exponent of \|Δlogp\|^α soft weighting (1.0 = linear) |
 | `ENERGY` | 0.90 | KT-Truncation energy threshold |
 | `BASE_MODEL` | `Qwen/Qwen3-1.7B` | HF id of base |
 | `N_QUERIES` | 128 | proxy queries per task |
@@ -67,9 +67,9 @@ SKIP_MERGE=1 bash run_pipeline.sh
 | `SKIP_BASELINES` | 0 | run **only ours**; skip 9 baselines in Step 3 |
 
 ```bash
-# Different threshold
-KEY_TOP_FRAC=0.10 SKIP_BASELINES=1 bash run_pipeline.sh
-KEY_TOP_FRAC=0.20 SKIP_BASELINES=1 bash run_pipeline.sh
+# α sweep
+ALPHA=0.5 SKIP_BASELINES=1 bash run_pipeline.sh
+ALPHA=2.0 SKIP_BASELINES=1 bash run_pipeline.sh
 ```
 
 ---
@@ -86,7 +86,7 @@ data/training/{ifeval,math,coding}.jsonl     ← Step 0b (expert-generated targe
 data/per_query/{ifeval,math,coding}.npz      ← Step 1 (teacher-force base+experts)
             │
             ▼
-outputs/W_col_neg_top<pct>_perexpert.npz     ← Step 2 (col-side W on bottom-K%)
+outputs/W_col_abs_perexpert.npz              ← Step 2 (col-side W, abs+soft, ×‖W[:,c]‖₂)
             │
             ▼
 outputs/merges/<method>/                     ← Step 3 (ours + 9 baselines)
@@ -100,11 +100,17 @@ external eval pipeline                       ← Step 4 (6 benches per merge)
 ## 2. Method (ours)
 
 For each Linear layer ℓ and expert i, compute a column-side weight from
-**bottom-K% Δlogp positions** (anti-key — where expert UNDER-performs base):
+**every** answer-token, weighted by its own |Δlogp|:
 
 ```
-ω_col[i, ℓ, c] = ‖W_i,ℓ[:, c]‖₂  ·  mean_{h ∈ neg_i} | x_expert_i(ℓ, h, c) |
+Δlogp[t]        = log p_expert_i(y_t) − log p_base(y_t)
+w[t]            = |Δlogp[t]|^α                                       (default α=1.0)
+mean_xabs[c]    = (Σ_t w[t] · |x_expert_i(ℓ, t)[c]|) / Σ_t w[t]
+ω_col[i, ℓ, c]  = ‖W_i,ℓ[:, c]‖₂  ·  mean_xabs[c]
 ```
+
+No top-K threshold; every token contributes proportional to its own |Δlogp|.
+The column-norm factor restores the |W·x| symmetry of the row-side counterpart.
 
 Then apply column-weighted SVD truncation per expert:
 
@@ -139,22 +145,21 @@ fills missing answers via each task's expert (greedy, max_new_tokens=512).
 ### Step 1 — Build proxy per_query npz ([`scripts/prep_proxy_qwen3.py`](scripts/prep_proxy_qwen3.py))
 
 For each task and `(prompt, answer)`, run teacher-forcing on **base + 3 experts**
-and save log-probs at the answer positions. Used downstream to identify
-anti-key tokens (bottom-K% by Δlog p).
+and save log-probs at the answer positions. Used downstream to compute
+|Δlogp| soft weights.
 
 ### Step 2 — Compute W_col ([`scripts/compute_W_col.py`](scripts/compute_W_col.py))
 
-For each expert i (forwarded on its own task), pick the **bottom-K%** answer
-positions ranked by Δlog p = log p_expert_i − log p_base (anti-key set).
-Hook the **input** to each Linear, accumulate `|z|`, average, then multiply
-by per-expert `‖W_i,ℓ[:, c]‖₂`.
+For each expert i (forwarded on its own task), accumulate input-side
+|x| per channel, weighted by **|Δlogp|^α** at every answer-token; normalize
+by Σw and multiply by per-expert `‖W_i,ℓ[:, c]‖₂`.
 
 ```bash
 python scripts/compute_W_col.py \
-    --key_top_frac 0.05 \
+    --alpha 1.0 \
     --ifeval models/ifeval --math models/math --coding models/coding \
     --in_dir data/per_query \
-    --out outputs/W_col_neg_top05_perexpert.npz \
+    --out outputs/W_col_abs_perexpert.npz \
     --device cuda:0
 ```
 
@@ -165,7 +170,7 @@ Output: per-layer 2D tensor of shape `(N=3, d_in)` indexed by
 
 | method | merge command |
 |---|---|
-| **ours: W_col_neg_top<pct>** | `merge_ablation.py --variants ktcol_polar_renorm --w_col_file <W>` |
+| **ours: W_col_abs** | `merge_ablation.py --variants ktcol_polar_renorm --w_col_file <W>` |
 | task_arithmetic | `merge.py --method task_arithmetic` |
 | ties / dare_ta | `merge.py --method ties|dare ...` |
 | star / tsv | `merge.py --method <name>` |
@@ -182,7 +187,7 @@ Or via the pipeline orchestrator:
 SKIP_BASELINES=1 bash run_pipeline.sh
 ```
 
-Output: `outputs/merges/W_col_neg_top<pct>/model.safetensors` (symlink into
+Output: `outputs/merges/W_col_abs/model.safetensors` (symlink into
 the auto-detected ablation subdir).
 
 ### Step 4 — Evaluate (external)
@@ -214,7 +219,7 @@ export CUDA_VISIBLE_DEVICES=0,1        # Step 1 / merge_baselines benefit from 2
 ```
 
 `DEVICE` is the logical device (default `cuda:0`).
-Step 2 only forwards each expert (Δlog p is read from per_query npz), single GPU enough.
+Step 2 only forwards each expert (Δlogp is read from per_query npz), single GPU enough.
 
 ---
 
@@ -232,14 +237,14 @@ KT_merge/
 │   ├── training/{task}.jsonl          ← Stage 0b
 │   └── per_query/{task}.npz           ← Step 1
 ├── outputs/
-│   ├── W_col_neg_top<pct>_perexpert.npz                     ← Step 2
-│   ├── merges/<method>/                                     ← Step 3
-│   └── merge_logs/                                          ← per-method logs
+│   ├── W_col_abs_perexpert.npz                                 ← Step 2
+│   ├── merges/<method>/                                        ← Step 3
+│   └── merge_logs/                                             ← per-method logs
 ├── scripts/
 │   ├── download_training_data.py    Stage 0a
 │   ├── generate_targets.py          Stage 0b
 │   ├── prep_proxy_qwen3.py          Step 1
-│   ├── compute_W_col.py             Step 2 (NEW: col-side, neg-K%, with ‖W‖)
+│   ├── compute_W_col.py             Step 2 (col-side, abs+soft |Δlogp|^α, with ‖W[:,c]‖₂)
 │   ├── merge_ktpolar.py             Step 3 helpers (kttrunc_per_expert with W_col)
 │   ├── merge_ablation.py            Step 3 entry for ours (13 variants)
 │   ├── merge.py                     Step 3 baselines

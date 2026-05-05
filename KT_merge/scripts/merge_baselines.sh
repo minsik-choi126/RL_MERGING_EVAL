@@ -20,8 +20,6 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
 TIES_DEVICE="${TIES_DEVICE:-${DEVICE}}"   # set to "cpu" to avoid OOM on TIES / DARE_TIES (both flatten all params)
-KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.20}"
-KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
 OUT_DIR="${OUT_DIR:-${ROOT}/outputs/merges}"
 LOG_DIR="${LOG_DIR:-${ROOT}/outputs/merge_logs}"
 
@@ -61,14 +59,14 @@ run() {  # run <tag> <python_command...>
 }
 
 # ── Ours ────────────────────────────────────────────────────────────────────
-# Variant ktcol_polar_renorm with column-side W (negative-Δlogp positions,
-# multiplied by ‖W[:,c]‖₂) — headline method.
-W_COL_FILE="${W_COL_FILE:-${ROOT}/outputs/W_col_neg_top${KEY_TOP_PCT}_perexpert.npz}"
+# Variant ktcol_polar_renorm with column-side W from abs+soft |Δlogp|^α
+# weighting on every answer-token, multiplied by ‖W[:,c]‖₂ — headline method.
+W_COL_FILE="${W_COL_FILE:-${ROOT}/outputs/W_col_abs_perexpert.npz}"
 if [ ! -f "${W_COL_FILE}" ]; then
     echo "[ERR] ${W_COL_FILE} missing — run compute_W_col.py first" >&2
     exit 1
 fi
-OURS_TAG="${OURS_TAG:-W_col_neg_top${KEY_TOP_PCT}}"
+OURS_TAG="${OURS_TAG:-W_col_abs}"
 ABL_ROOT="${OUT_DIR}/_ablation/${OURS_TAG}"
 ABL_OUT="${ABL_ROOT}/ktcol_polar_renorm"
 OURS_TARGET="${OUT_DIR}/${OURS_TAG}"

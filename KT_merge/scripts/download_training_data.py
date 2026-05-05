@@ -4,10 +4,12 @@ Each Qwen3 RL dataset has a different schema:
     ifeval — prompt list, NO gold answer (RL uses rule-based verifier)
     math   — problem + answer (string)
     coding — responses_create_params.input + unit_tests, NO gold code answer
+    lucy   — chat-format prompt list + completion (musique web-search agent
+             RL data; gold completion present)
 
 For ifeval/coding we save only the prompt; targets are generated later by the
-task-specific expert in `generate_targets.py`. For math we save (prompt, answer)
-directly using the gold answer.
+task-specific expert in `generate_targets.py`. For math/lucy we save
+(prompt, answer) directly using the gold answer/completion.
 
 Output: data/training/{task}_raw.jsonl   ({"prompt": ..., "answer": ... or null})
 
@@ -26,6 +28,7 @@ HF_DATASETS = {
     "ifeval": "nvidia/Nemotron-Cascade-RL-Instruction-Following",
     "math":   "nvidia/Nemotron-Cascade-RL-Math",
     "coding": "nvidia/Nemotron-RL-coding-competitive_coding",
+    "lucy":   "Menlo/sft-lucy-musique-data-corrected-with-completion",
 }
 
 
@@ -72,6 +75,20 @@ def extract(task: str, row: dict) -> dict | None:
             prompt = _messages_to_prompt(rcp.get("input"))
             return {"prompt": prompt, "answer": None} if prompt else None
         return None
+
+    if task == "lucy":
+        # Menlo/sft-lucy-musique-data-corrected-with-completion:
+        # row['prompt']     = chat-format list  (system + user messages)
+        # row['completion'] = chat-format list  (assistant turns; gold answer)
+        prompt = _messages_to_prompt(row.get("prompt"))
+        comp = row.get("completion")
+        ans = _messages_to_prompt(comp) if comp is not None else None
+        if not prompt:
+            return None
+        # final_answer is a short string sometimes; prefer the full completion text
+        if not ans and isinstance(row.get("final_answer"), str):
+            ans = str(row["final_answer"])
+        return {"prompt": prompt, "answer": ans if ans else None}
 
     raise ValueError(f"unknown task {task}")
 

@@ -28,8 +28,8 @@
 #   BASE_MODEL=Qwen/Qwen3-1.7B    HF id of base
 #   N_QUERIES=128                 proxy queries per task for log-prob extraction
 #   SEED=42                       sampling seed
-#   KEY_TOP_FRAC=0.05             per-expert BOTTOM-K fraction by Δlog p (default 5%)
-#                                 (anti-key positions where expert under-performs base)
+#   ALPHA=1.0                     |Δlogp|^α soft-weighting exponent (1.0 = linear)
+#                                 every answer-token contributes ∝ |Δlogp|^α
 #   ENERGY=0.90                   KT-Truncation energy threshold
 set -euo pipefail
 
@@ -42,11 +42,10 @@ OUTPUTS_DIR="${HERE}/outputs"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-1.7B}"
 N_QUERIES="${N_QUERIES:-128}"
 SEED="${SEED:-42}"
-KEY_TOP_FRAC="${KEY_TOP_FRAC:-0.05}"
+ALPHA="${ALPHA:-1.0}"
 ENERGY="${ENERGY:-0.90}"
 DEVICE="${DEVICE:-cuda:0}"
-KEY_TOP_PCT="$(printf '%02d' "$(awk "BEGIN{printf \"%d\", ${KEY_TOP_FRAC}*100+0.5}")")"
-W_COL_FILE="${OUTPUTS_DIR}/W_col_neg_top${KEY_TOP_PCT}_perexpert.npz"
+W_COL_FILE="${OUTPUTS_DIR}/W_col_abs_perexpert.npz"
 
 mkdir -p "${TRAINING_DIR}" "${PER_QUERY_DIR}" "${OUTPUTS_DIR}"
 
@@ -57,7 +56,7 @@ echo "  BASE_MODEL          : ${BASE_MODEL}"
 echo "  CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-(unset; use any)}"
 echo "  DEVICE              : ${DEVICE}"
 echo "  N_QUERIES / SEED    : ${N_QUERIES} / ${SEED}"
-echo "  KEY_TOP_FRAC        : ${KEY_TOP_FRAC}  (BOTTOM ${KEY_TOP_PCT}% per expert)"
+echo "  ALPHA               : ${ALPHA}  (|Δlogp|^α soft weighting; 1.0 = linear)"
 echo "  ENERGY              : ${ENERGY}"
 echo "  W_COL_FILE          : ${W_COL_FILE}"
 echo ""
@@ -115,12 +114,12 @@ else
     echo "── Step 1: SKIPPED (SKIP_PREP=1)"
 fi
 
-# ── Step 2: compute W_col (column-side, BOTTOM-K% by Δlogp, × ‖W[:,c]‖) ─────
+# ── Step 2: compute W_col (column-side, abs+soft |Δlogp|^α × ‖W[:,c]‖) ──────
 if [ "${SKIP_COMPUTE_W:-0}" != "1" ]; then
     echo ""
-    echo "── Step 2: compute W_col (bottom ${KEY_TOP_PCT}% per expert, with ‖W[:,c]‖ factor) ──"
+    echo "── Step 2: compute W_col (abs+soft α=${ALPHA}, with ‖W[:,c]‖₂ factor) ──"
     python "${SCRIPTS}/compute_W_col.py" \
-        --key_top_frac "${KEY_TOP_FRAC}" \
+        --alpha "${ALPHA}" \
         --ifeval "${HERE}/models/ifeval" \
         --math   "${HERE}/models/math" \
         --coding "${HERE}/models/coding" \
@@ -138,7 +137,6 @@ if [ "${SKIP_MERGE:-0}" != "1" ]; then
     echo "── Step 3: merge ours + baselines ──"
     BASE_MODEL="${BASE_MODEL}" \
     W_COL_FILE="${W_COL_FILE}" \
-    KEY_TOP_FRAC="${KEY_TOP_FRAC}" \
     ENERGY="${ENERGY}" \
     DEVICE="${DEVICE}" \
     OUT_DIR="${OUTPUTS_DIR}/merges" \
