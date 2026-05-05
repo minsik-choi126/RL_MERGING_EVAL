@@ -6,7 +6,7 @@ KT-merging method (column-wise weighting via |Δlogp|^α soft + Wnorm) **and**
 
 > Base: `Qwen/Qwen3-1.7B`
 > Experts: ifeval-RL, math-RL, lucy-RL  (Nemotron-Cascade recipes)
-> Eval: ifeval / aime24 / aime25 / aime26 / livebench / livecodebench
+> Eval: ifeval / aime24 / aime25 / aime26
 
 ---
 
